@@ -1,0 +1,62 @@
+
+REPORT z_display_tvarvc_in_transport.
+TYPES: BEGIN OF ty_output,
+         trkorr  TYPE trkorr,
+         include TYPE tvarvc,
+       END OF ty_output.
+DATA: lt_tvarvc TYPE TABLE OF tvarvc,
+      ls_tvarvc TYPE tvarvc,
+      lt_output TYPE TABLE OF ty_output,
+      ls_output TYPE ty_output.
+
+
+
+DATA: lo_alv TYPE REF TO cl_salv_table.
+
+START-OF-SELECTION.
+  " Get entries from TVARVC table
+  SELECT * FROM tvarvc INTO TABLE lt_tvarvc.
+
+  IF lt_tvarvc IS NOT INITIAL.
+    " Loop through TVARVC entries
+    LOOP AT lt_tvarvc INTO ls_tvarvc.
+      DATA(lr_name) = VALUE rsdsselopt_t(
+                                   ( sign = 'I'
+                                    option = 'CP'
+                                    low = |*| & |{ ls_tvarvc-name }| & |*| ) ).
+      SELECT SINGLE trkorr
+        FROM e071k
+        INTO @DATA(ls_trkorr)
+       WHERE objname EQ 'TVARVC'
+         AND ( tabkey IN @lr_name ).
+      ls_output-trkorr = ls_trkorr.
+      ls_output-include = ls_tvarvc.
+      APPEND ls_output TO lt_output.
+      CLEAR: ls_output, ls_trkorr.
+
+    ENDLOOP.
+*      " Check if entry is included in any transport request
+*      SELECT SINGLE trkorr
+*        FROM e070
+*        WHERE obj_name = @ls_tvarvc-name
+*          AND obj_type = 'D'
+*          AND obj_key  = @ls_tvarvc-tdobject
+*          INTO @ls_output-trkorr.
+*
+*      " Populate output table
+*      ls_output-varname = ls_tvarvc-name.
+*      ls_output-included = ls_output-trkorr IS NOT INITIAL AND ls_output-trkorr NE space.
+*      APPEND ls_output TO lt_output.
+    " Display output in ALV format
+    CALL METHOD cl_salv_table=>factory
+      IMPORTING
+        r_salv_table = lo_alv
+      CHANGING
+        t_table      = lt_output.
+    lo_alv->set_screen_status( pfstatus = 'SALV_STANDARD'
+                                report = 'SALV_DEMO_TABLE_FUNCTIONS'
+                                set_functions = lo_alv->c_functions_all ).
+    lo_alv->display( ).
+  ELSE.
+    WRITE: / 'No entries found in TVARVC table.'.
+  ENDIF.
