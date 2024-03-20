@@ -1,0 +1,44 @@
+*&---------------------------------------------------------------------*
+*& Report Z118377_UOM_CONVERSION
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT z118377_uom_conversion.
+
+DATA: iv_input           TYPE meng15 VALUE '81',
+      iv_input2          TYPE meng15 VALUE '500',
+      ev_output          TYPE meng15,
+      iv_product         TYPE matnr VALUE 'KES_45',
+      iv_alternativeunit TYPE meins VALUE 'ST',
+      cv_baseunit        TYPE meins VALUE 'M3'.
+
+*&---------------------------------------------------------------------*
+*& Convert 81 M3 to PC
+*&---------------------------------------------------------------------*
+cl_md_product_unit_conversion=>convert(
+  EXPORTING
+    input              = iv_input
+    product            = iv_product
+    alternativeunit    = iv_alternativeunit
+  IMPORTING
+    output             = ev_output
+  CHANGING
+    baseunit           = cv_baseunit ).
+
+WRITE:  ev_output, iv_alternativeunit.
+
+*&---------------------------------------------------------------------*
+*& Convert 500 PC to M3
+*&---------------------------------------------------------------------*
+cl_md_product_unit_conversion=>convert(
+  EXPORTING
+    input              = iv_input
+    product            = iv_product
+    is_alternativeunit = abap_true
+    alternativeunit    = cv_baseunit
+  IMPORTING
+    output             = ev_output
+  CHANGING
+    baseunit           = iv_alternativeunit ).
+
+WRITE:  ev_output, cv_baseunit.
