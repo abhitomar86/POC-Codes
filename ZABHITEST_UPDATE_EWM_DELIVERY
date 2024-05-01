@@ -1,0 +1,306 @@
+*&---------------------------------------------------------------------*
+*& Report ZABHITEST_UPDATE_EWM_DELIVERY
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zabhitest_update_ewm_delivery.
+
+SELECTION-SCREEN BEGIN OF BLOCK bb01.
+
+  PARAMETERS: p_delv  TYPE likp-vbeln.
+
+SELECTION-SCREEN END OF BLOCK bb01.
+
+DATA: lo_sp                       TYPE REF TO /scdl/cl_sp_prd_out,
+      lo_message_box              TYPE REF TO /scdl/cl_sp_message_box,
+      lt_a_head                   TYPE /scdl/t_sp_a_head,
+      lt_sp_k_head                TYPE /scdl/t_sp_k_head,
+      lt_sp_k_itm                 TYPE /scdl/t_sp_k_item,
+      ls_sp_k_head                TYPE /scdl/s_sp_k_head,
+      ls_sp_k_itm                 TYPE /scdl/s_sp_k_item,
+      lt_sapext_prdo              TYPE /scdl/t_sp_a_item_sapext_prdo,
+      lt_a_head_eew               TYPE /scdl/t_sp_a_head_eew_prd,
+      lt_a_head_eew_out           TYPE /scdl/t_sp_a_head_eew_prd,
+      ls_sp_action                TYPE /scdl/s_sp_act_action,
+      lv_rejected                 TYPE boole_d,
+      lv_error                    TYPE boole_d,
+      lv_validation_error_occured TYPE boole_d,
+      lt_return_codes             TYPE /scdl/t_sp_return_code,
+      lo_msgbox                   TYPE REF TO /scdl/cl_sp_message_box,
+      lt_validation_messages      TYPE /scdl/dm_message_tab,
+      lt_messages                 TYPE /scdl/dm_message_tab.
+DATA: lt_whr_key_query   TYPE  /scwm/dlv_docid_item_tab,
+      lt_itm_old         TYPE /scwm/dlv_item_out_prd_tab,
+      lt_sapext_prdo_upd TYPE /scdl/t_sp_a_item_sapext_prdo,
+      lt_dlv_item        TYPE /scdl/t_sp_a_item,
+      lt_dlv_head        TYPE /scdl/t_sp_a_head,
+      lt_return_code     TYPE /scdl/t_sp_return_code.
+FIELD-SYMBOLS: <ls_a_head_eew> TYPE /scdl/s_sp_a_head_eew_prd,
+               <ls_messages>   TYPE /scdl/dm_message_str.
+FIELD-SYMBOLS: <sapext_prdi> TYPE /scdl/s_sp_a_item_sapext_prdi,
+               <sapext_prdo> TYPE /scdl/s_sp_a_item_sapext_prdo.
+
+START-OF-SELECTION.
+
+  SELECT SINGLE /scdl/db_proci_o~docid, /scdl/db_proci_o~itemid
+    FROM /scdl/db_proci_o
+    INNER JOIN /scdl/db_refdoc ON /scdl/db_refdoc~docid EQ /scdl/db_proci_o~docid
+    WHERE refdocno = @p_delv
+      AND refdoccat = 'ERP'
+      AND /scdl/db_refdoc~doccat = 'PDO'
+      AND /scdl/db_proci_o~itemid IS NOT INITIAL
+  INTO @DATA(lv_docid).
+  IF sy-subrc EQ 0.
+    WRITE: / lv_docid-docid, lv_docid-itemid.
+  ELSE.
+    WRITE:/'Error in Selecting Order'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+* create service provider for processing delivery and and message box
+* the service provider is not used here for a UI (so no attribute handler is used)
+
+  TRY.
+      CREATE OBJECT lo_message_box.
+      CREATE OBJECT lo_sp
+        EXPORTING
+          io_message_box = lo_message_box
+          iv_doccat      = /scdl/if_dl_doc_c=>sc_doccat_out_prd
+          iv_mode        = /scdl/cl_sp=>sc_mode_classic.
+  ENDTRY.
+* set warehouse that is used
+  /scwm/cl_tm=>set_lgnum( '4510' ).
+*---------Comment Start---------------
+* fill GUID of delivery header
+*  CLEAR ls_sp_k_head.
+*  ls_sp_k_head-docid = lv_docid-docid.
+*  APPEND ls_sp_k_head TO lt_sp_k_head.
+  CLEAR ls_sp_k_itm.
+  ls_sp_k_itm-docid = lv_docid-docid.
+  ls_sp_k_itm-itemid = lv_docid-itemid.
+  APPEND ls_sp_k_itm TO lt_sp_k_itm.
+** try to lock (also creates the delivery instance immediately)
+  CLEAR lt_return_codes.
+  CLEAR lv_rejected.
+
+  lo_sp->lock(
+   EXPORTING
+     inkeys = lt_sp_k_itm
+     aspect = /scdl/if_sp_c=>sc_asp_item
+     lockmode = /scdl/if_sp1_locking=>sc_exclusive_lock
+  IMPORTING
+     rejected = lv_rejected
+     return_codes = lt_return_codes ).
+
+* check if any error occurred
+  READ TABLE lt_return_codes
+    TRANSPORTING NO FIELDS
+    WITH KEY failed = abap_true.
+  IF sy-subrc = 0 OR lv_rejected = abap_true.
+    lv_error = abap_true.
+      CALL FUNCTION '/SCWM/GET_MESSAGE_DLV_SP'
+        EXPORTING
+          io_msgbox = lo_msgbox
+        EXCEPTIONS
+          error     = 1
+          OTHERS    = 2.
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+             WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+             RAISING error.
+      ENDIF.
+  ENDIF.
+*
+** if no error so far...
+*  IF lv_error = abap_false.
+** select customer fields EEW for the delivery
+*    CLEAR lt_return_codes.
+*    CLEAR lv_rejected.
+*    lo_sp->select(
+*    EXPORTING
+*      inkeys = lt_sp_k_head
+*      aspect = /scdl/if_sp_c=>sc_asp_head_eew_prd
+** OPTIONS
+*    IMPORTING
+*      outrecords = lt_a_head_eew
+*      rejected = lv_rejected
+*      return_codes = lt_return_codes ).
+** check if any error occurred
+*    READ TABLE lt_return_codes
+*    TRANSPORTING NO FIELDS
+*    WITH KEY failed = abap_true.
+*    IF sy-subrc = 0 OR lv_rejected = abap_true.
+*      lv_error = abap_true.
+*    ENDIF.
+*    LOOP AT lt_a_head_eew ASSIGNING <ls_a_head_eew>.
+** now fill the customer specific field
+**      z_zusatz <ls_a_head_eew>-z_zusatz = '1'.
+*    ENDLOOP.
+*  ENDIF.
+*-------------------------Comment End--------------------
+
+  ls_sp_k_itm-docid = lv_docid-docid.
+  ls_sp_k_itm-itemid = lv_docid-itemid.
+  APPEND ls_sp_k_itm TO lt_sp_k_itm.
+
+  lo_sp->select(
+    EXPORTING
+      inkeys      =  lt_sp_k_itm
+      aspect      = /scdl/if_sp_c=>sc_asp_item_sapext_prdo
+    IMPORTING
+      outrecords  = lt_sapext_prdo
+      rejected    = lv_rejected
+      return_codes = lt_return_code ).
+  READ TABLE lt_return_code TRANSPORTING NO FIELDS WITH KEY
+                            failed = abap_true.
+  IF sy-subrc = 0 OR lv_rejected = abap_true.
+    lv_error = abap_true.
+  ENDIF.
+  READ TABLE lt_sapext_prdo ASSIGNING <sapext_prdo> WITH KEY
+                                 docid = lv_docid-docid
+                                 itemid = lv_docid-itemid.
+*  IF <sapext_prdo>-/scwm/stagarbin = iv_gmbin OR
+*     ( iv_check_initial = abap_true AND
+*       NOT <sapext_prdo>-/scwm/stagarbin IS INITIAL ).
+*    RETURN.
+*  ENDIF.
+  IF sy-subrc eq 0.
+    <sapext_prdo>-/scwm/gmbin = '01-02-12'.
+    <sapext_prdo>-/scwm/gmbin_ind = /scdl/if_dl_data_c=>sc_ind_computed.
+    <sapext_prdo>-/scwm/stobin = '01-02-12'.
+    <sapext_prdo>-/scwm/stobin_ind = /scdl/if_dl_data_c=>sc_ind_computed.
+    <sapext_prdo>-/scwm/door = 'YDI2'.
+    <sapext_prdo>-/scwm/door_ind =  /scdl/if_dl_data_c=>sc_ind_computed.
+  ENDIF.
+
+
+  lo_sp->update(
+    EXPORTING
+      inrecords      = lt_sapext_prdo
+      aspect         = /scdl/if_sp_c=>sc_asp_item_sapext_prdo
+    IMPORTING
+      outrecords  = lt_sapext_prdo_upd
+      rejected    = lv_rejected
+      return_codes = lt_return_code ).
+  READ TABLE lt_return_code TRANSPORTING NO FIELDS WITH KEY
+                            failed = abap_true.
+  IF sy-subrc = 0 OR lv_rejected = abap_true.
+    lv_error = abap_true.
+  ENDIF.
+  IF lv_error = abap_false.
+    ls_sp_action-action_code = /scdl/if_bo_action_c=>sc_determine.
+    ls_sp_k_head-docid = lv_docid-docid.
+    APPEND ls_sp_k_head TO lt_sp_k_head.
+    lo_sp->execute(
+      EXPORTING
+        aspect      = /scdl/if_sp_c=>sc_asp_head
+        inkeys      = lt_sp_k_head
+        inparam     = ls_sp_action
+        action      = /scdl/if_sp_c=>sc_act_execute_action
+      IMPORTING
+        outrecords  = lt_dlv_head
+        rejected    = lv_rejected
+        return_codes = lt_return_code ).
+    READ TABLE lt_return_code TRANSPORTING NO FIELDS WITH KEY
+                          failed = abap_true.
+    IF sy-subrc = 0 OR lv_rejected = abap_true.
+      lv_error = abap_true.
+      CALL FUNCTION '/SCWM/GET_MESSAGE_DLV_SP'
+        EXPORTING
+          io_msgbox = lo_msgbox
+        EXCEPTIONS
+          error     = 1
+          OTHERS    = 2.
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+             WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+             RAISING error.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+* if no error so far...
+  IF lv_error = abap_false.
+* update customer fields EEW for the delivery
+*    CLEAR lt_return_codes.
+*    CLEAR lv_rejected.
+*    lo_sp->update(
+*    EXPORTING
+*      inrecords = lt_a_head_eew
+*      aspect = /scdl/if_sp_c=>sc_asp_head_eew_prd
+** OPTIONS
+*    IMPORTING
+*      outrecords = lt_a_head_eew_out
+*      rejected = lv_rejected
+*      return_codes = lt_return_codes ).
+** check if any error occurred
+*    READ TABLE lt_return_codes
+*    TRANSPORTING NO FIELDS
+*    WITH KEY failed = abap_true.
+*    IF sy-subrc = 0 OR lv_rejected = abap_true.
+*      lv_error = abap_true.
+*    ENDIF.
+  ENDIF.
+* if no error so far...
+  IF lv_error = abap_false.
+* validate the delivery (also triggers determinations)
+* this is an optional step. it is assumed in this example that if validation errors occur
+* the delivery should not get saved.
+* if also deliveries with validation errors (blocked status) should GET saved,
+* the error handling has to distinguish between validation errors and other errors
+* validation error messages are in the message box and are not returned as rejected or return_codes
+    ls_sp_action-action_code = /scdl/if_bo_action_c=>sc_validate.
+    CLEAR lt_return_codes.
+    CLEAR lv_rejected.
+    lo_sp->execute(
+     EXPORTING
+       aspect = /scdl/if_sp_c=>sc_asp_head
+       inkeys = lt_sp_k_head
+       inparam = ls_sp_action
+       action = /scdl/if_sp_c=>sc_act_execute_action
+    IMPORTING
+      outrecords = lt_a_head
+      rejected = lv_rejected
+      return_codes = lt_return_codes ).
+* check if any error occurred read table lt_return_codes transporting no fields with key failed = abap_true.
+    IF sy-subrc = 0 OR lv_rejected = abap_true.
+      lv_error = abap_true.
+    ENDIF.
+  ENDIF.
+* get all messages that occurred.GET the always as validation messages
+* are also of interest
+  lt_messages = lo_message_box->get_messages( ).
+* build two tables, one with validation messages and one with "real" errors
+  LOOP AT lt_messages ASSIGNING <ls_messages> WHERE consistency_message = abap_true.
+    APPEND <ls_messages> TO lt_validation_messages. DELETE lt_messages.
+  ENDLOOP.
+  LOOP AT lt_messages TRANSPORTING NO FIELDS WHERE msgty CA 'EAX'.
+    lv_error = abap_true.
+    EXIT.
+  ENDLOOP.
+  LOOP AT lt_validation_messages TRANSPORTING NO FIELDS WHERE msgty CA 'EAX'.
+    lv_validation_error_occured = abap_true.
+    EXIT.
+  ENDLOOP.
+* now save delivery dependant on if error occurred or not.
+* here validation errors are also considered. this depends on the business logic.
+  IF lv_error = abap_false AND lv_validation_error_occured = abap_false.
+    CLEAR lt_return_codes.
+    CLEAR lv_rejected.
+    lo_sp->save(
+    IMPORTING rejected = lv_rejected ).
+* check if during save serious errors occurred.
+    IF lv_rejected = abap_true.
+      lv_error = abap_true.
+* if errors occurred then get the messages again
+      lt_messages = lo_message_box->get_messages( ).
+    ENDIF.
+  ENDIF.
+
+* now do a commit (here with wait) or rollback dependant on if errors occurred or not
+  IF lv_error = abap_false AND lv_validation_error_occured = abap_false.
+    COMMIT WORK AND WAIT.
+    /scwm/cl_tm=>cleanup( ). "clear buffers and release locks
+  ELSE.
+    ROLLBACK WORK.
+    /scwm/cl_tm=>cleanup( ). "clear buffers and release locks
+  ENDIF.
