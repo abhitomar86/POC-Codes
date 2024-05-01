@@ -1,0 +1,146 @@
+*&---------------------------------------------------------------------*
+*& Report ZRTEST_STO
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zrtest_sto1.
+
+*IF sy-uname = 'E91002468'.
+
+
+CONSTANTS: lc_doc    TYPE tvarvc-name VALUE  '53_10460_PO_DOC_TYPE',
+           lc_sign   TYPE s_sign     VALUE 'I',
+           lc_option TYPE s_option   VALUE 'EQ'.
+
+
+
+TYPES: BEGIN OF zstr_result,
+         zz1_prod_sdi      TYPE zz1_prod,
+         zz1_prod_comp_sdi TYPE zz1_prod_comp,
+         zz1_prodpack_sdi  TYPE zz1_prodpack,
+         vbeln             TYPE vbeln_va,
+         posnr             TYPE posnr_co,
+         ebeln             TYPE ebeln,
+         ebelp             TYPE ebelp,
+       END OF zstr_result.
+
+
+TYPES: BEGIN OF lte_final,
+         po_number TYPE ebeln,
+         qunatity  TYPE bstmg,
+*         po_unit   TYPE bstme,
+         include   TYPE bapiparex,
+       END OF lte_final.
+
+*       need to make structure for final table.
+
+
+DATA: lt_poheader    TYPE STANDARD TABLE OF bapimepoheader,
+      ls_poheader    LIKE LINE OF lt_poheader,
+      ls_poheaderx   TYPE bapimepoheaderx,
+      lt_poitem      TYPE STANDARD TABLE OF bapimepoitem,
+      ls_poitem      LIKE LINE OF lt_poitem,
+      lt_poitemx     TYPE STANDARD TABLE OF bapimepoitemx,
+      ls_poitemx     LIKE LINE OF lt_poitemx,
+      lt_return      TYPE STANDARD TABLE OF bapiret2,
+      ls_return      LIKE LINE OF lt_return,
+*      lt_extensionin TYPE STANDARD TABLE OF bapiparex,
+      ls_extensionin TYPE bapiparex,
+      ls_bapi_te_po  TYPE bapi_te_mepoitem,
+      ls_bapi_te_pox TYPE bapi_te_mepoitemx,
+      lt_result      TYPE STANDARD TABLE OF zstr_result,
+      ls_result      LIKE LINE OF lt_result,
+      lt_final       TYPE STANDARD TABLE OF lte_final,
+      ls_final       LIKE LINE OF lt_final,
+      lr_doc_type    TYPE RANGE OF ekko-bsart,
+      ls_po_hdr_ext  TYPE mmpur_po_bapi_header_ext,
+      ls_po_item_ext TYPE mmpur_po_bapi_item_ext,
+      lt_po_item_ext TYPE STANDARD TABLE OF mmpur_po_bapi_item_ext.
+
+
+
+FIELD-SYMBOLS: <fs_result> TYPE zstr_result.
+DATA: ls_zpo_bapi_te_po_change TYPE zpo_bapi_te_po_change.
+
+CONSTANTS: gc_bapiparex_msr_bapi_po_chg TYPE te_struc  VALUE 'ZPO_BAPI_TE_PO_CHANGE' .
+*
+CLEAR: lt_return, ls_bapi_te_po, ls_bapi_te_pox.
+
+SELECT * FROM tvarvc INTO TABLE @DATA(lt_tvarvc1) WHERE name = @lc_doc. "#EC CI_SEL_NESTED
+
+IF sy-subrc = 0.
+  LOOP AT lt_tvarvc1 ASSIGNING FIELD-SYMBOL(<lfs_tvarvc1>).
+    APPEND VALUE #( sign = <lfs_tvarvc1>-sign option = <lfs_tvarvc1>-opti low = <lfs_tvarvc1>-low ) TO lr_doc_type.
+  ENDLOOP.
+ENDIF.
+
+
+SELECT vbap~zz1_prod_sdi,vbap~zz1_prod_comp_sdi, vbap~zz1_prodpack_sdi,vbap~vbeln,vbap~posnr, ekkn~ebeln, ekkn~ebelp", ekko~ebeln, ekko~bsart
+  FROM vbap
+ INNER JOIN ekkn
+    ON vbap~vbeln = ekkn~vbeln
+  INTO TABLE @lt_result
+ WHERE vbap~vbeln = '2200003253' .
+
+
+LOOP AT lt_result ASSIGNING <fs_result>.
+
+  ls_poheader-po_number  = <fs_result>-ebeln.
+  ls_poheaderx-po_number = 'U'.
+
+  ls_poitem-po_item = <fs_result>-ebelp.
+  ls_poitem-quantity = <fs_result>-zz1_prod_sdi.
+  APPEND ls_poitem TO lt_poitem.
+
+  ls_poitemx-po_item = <fs_result>-ebelp.
+  ls_poitemx-po_itemx = 'X'.
+  ls_poitemx-quantity = 'X'.
+  APPEND ls_poitemx TO lt_poitemx.
+
+  ls_po_hdr_ext-key = <fs_result>-ebeln.
+  ls_po_item_ext-key = <fs_result>-ebelp.
+  ls_po_item_ext-data-zz1_prod_compl_pdi      = 'X'.
+  ls_po_item_ext-datax-zz1_prod_compl_pdi     = abap_true.
+  ls_po_item_ext-data-zz1_prodpack_lei_pdi    = '000021'.
+  ls_po_item_ext-datax-zz1_prodpack_lei_pdi   = abap_true.
+
+  CLEAR: ls_extensionin.
+  APPEND ls_po_item_ext TO lt_po_item_ext.
+  DATA(lt_extensionin) = cl_mm_pur_po_bapi_ext_helper=>get_instance( )->put_extension_data(
+                                                                                            ir_header = REF #( ls_po_hdr_ext )
+                                                                                            ir_items  = REF #( lt_po_item_ext ) ).
+
+  CALL FUNCTION 'BAPI_PO_CHANGE' "IN UPDATE TASK
+    EXPORTING
+      purchaseorder = ls_poheader-po_number
+      poheader      = ls_poheader
+      poheaderx     = ls_poheaderx
+    TABLES
+      return        = lt_return
+      poitem        = lt_poitem
+      poitemx       = lt_poitemx
+      extensionin   = lt_extensionin.
+  READ TABLE lt_return WITH KEY type = 'E' TRANSPORTING NO FIELDS.
+      IF sy-subrc NE 0.
+
+    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+      EXPORTING
+        wait = 'X'.
+  ENDIF.
+          .
+
+
+  READ TABLE lt_extensionin INTO ls_extensionin INDEX 1.
+
+  ls_final-include = ls_extensionin.
+  ls_final-po_number = ls_poheader-po_number.
+  APPEND ls_final TO lt_final.
+
+
+  CLEAR: ls_poheader, ls_poheaderx, lt_poitem,lt_poitemx, lt_extensionin, ls_final.
+
+ENDLOOP.
+
+LOOP AT lt_final INTO ls_final.
+  WRITE: / ls_final-po_number, ls_final-include.
+ENDLOOP.
