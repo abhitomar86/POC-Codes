@@ -1,0 +1,104 @@
+*&---------------------------------------------------------------------*
+*& Report ZBAPI_GOODSMVMT_CREATE
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zbapi_goodsmvmt_create.
+DATA: ls_mmdochdr LIKE bapi2017_gm_head_01,
+      lt_gm       TYPE STANDARD TABLE OF bapi2017_gm_item_create,
+      ls_gm       LIKE bapi2017_gm_item_create,
+      ls_code     TYPE bapi2017_gm_code,
+      lt_ret      TYPE STANDARD TABLE OF bapiret2,
+      ls_ret      LIKE bapiret2,
+      ls_print    TYPE bapi2017_gm_print,
+      ls_hdr      LIKE bapi2017_gm_head_ret,
+      ls_ser      LIKE bapi2017_gm_serialnumber,
+      ls_item     TYPE BAPI2017_GM_HEAD_RET,
+      lt_ser      LIKE  STANDARD TABLE OF bapi2017_gm_serialnumber.
+
+PARAMETERS: p_pstdat LIKE bapi2017_gm_head_01-pstng_date DEFAULT sy-datum,
+            p_docdat LIKE bapi2017_gm_head_01-doc_date DEFAULT sy-datum,
+            p_matnr  LIKE bapi2017_gm_item_create-material,
+            p_plant  LIKE bapi2017_gm_item_create-plant,
+            p_sloc   LIKE bapi2017_gm_item_create-stge_loc,
+            p_quant  LIKE bapi2017_gm_item_create-entry_qnt,
+            p_uom    LIKE bapi2017_gm_item_create-entry_uom,
+            p_batch  LIKE bapi2017_gm_item_create-batch,
+            p_po     LIKE bapi2017_gm_item_create-po_number,
+            p_item   LIKE bapi2017_gm_item_create-po_item,
+            p_ven    LIKE bapi2017_gm_item_create-vendor,
+
+*            p_item   LIKE bapi2017_gm_item_create-po_item,
+            p_prctr  LIKE bapi2017_gm_item_create-profit_ctr,
+            p_whn    LIKE bapi2017_gm_item_create-warehouse_ewm,
+            p_stbin  LIKE bapi2017_gm_item_create-stge_bin_ewm,
+            p_order  LIKE bapi2017_gm_item_create-orderid.
+
+START-OF-SELECTION.
+
+* Prepare Data for Goods Movement
+  ls_mmdochdr-pstng_date = p_pstdat.
+  ls_mmdochdr-doc_date = p_docdat.
+  ls_mmdochdr-ext_wms = '3'.
+  ls_code-gm_code = '01'.
+  ls_print-pr_print = 2.
+*  ls_gm-move_type = '261'.
+  ls_gm-material  = p_matnr.
+  ls_gm-plant     = p_plant.
+  ls_gm-stge_loc  = p_sloc.
+  ls_gm-entry_qnt = p_quant.
+  ls_gm-entry_uom = p_uom.
+  ls_gm-batch     = p_batch.
+  ls_gm-orderid = p_order.
+  ls_gm-mvt_ind = 'B'.
+  ls_gm-move_type = '101'.
+*  ls_gm-NO_MORE_GR =
+  ls_gm-warehouse_ewm = p_whn.
+  ls_gm-stge_bin_ewm  = p_stbin.
+  ls_gm-profit_ctr = p_prctr.
+  ls_gm-vendor = p_ven.
+*  vendor
+*  unload_pt
+  ls_gm-po_number = p_po.
+  ls_gm-po_item = p_item.
+  APPEND ls_gm TO lt_gm.
+  CLEAR ls_gm.
+
+* Call BAPI
+  .
+  CALL FUNCTION 'BAPI_GOODSMVT_CREATE'
+    EXPORTING
+      goodsmvt_header     = ls_mmdochdr
+      goodsmvt_code       = ls_code
+      goodsmvt_print_ctrl = ls_print
+    IMPORTING
+      goodsmvt_headret    = ls_hdr
+    TABLES
+      goodsmvt_item       = lt_gm
+      return              = lt_ret.
+
+* If no error, commit
+  IF lt_ret IS INITIAL.
+    WRITE: 'Material Document posted:', ls_hdr-mat_doc, ' ', ls_hdr-doc_year.
+
+    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+      EXPORTING
+        wait = 'X'.
+*   Alternative COMMIT WORK.
+  ELSE.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+*   Alternative ROLLBACK WORK.
+    WRITE: 'Error during posting Material document:', /.
+    LOOP AT lt_ret INTO ls_ret.
+      WRITE: ls_ret-type,
+             ls_ret-id,
+             ls_ret-number,
+             ls_ret-message,
+             ls_ret-log_no,
+             ls_ret-log_msg_no,
+             ls_ret-message_v1,
+             ls_ret-message_v2,
+             ls_ret-message_v3,
+             ls_ret-message_v4.
+    ENDLOOP.
+  ENDIF.
