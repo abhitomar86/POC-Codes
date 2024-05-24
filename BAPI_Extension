@@ -1,0 +1,14 @@
+Refer CL_MMPUR_CCTR_DISTRIBUTION =>MAP_BE_DOCUMENT_TO_BAPI
+
+    DATA(lt_bapiparex) = conv_to_bapiparex_single_xml( ir_data = REF #( ls_header_ext ) ).
+    APPEND LINES OF lt_bapiparex TO et_extensionin
+
+mmpur_oa_bapi_header_ext
+
+ cl_cfd_bapi_mapping=>get_instance( )->map_to_bapiparex_single( EXPORTING ir_source_structure = ir_data
+                                                                       CHANGING  ct_bapiparex        = rt_bapiparex ).
+TRY.
+        cl_cfd_bapi_mapping=>get_instance( )->map_to_bapiparex_single( EXPORTING ir_source_structure = ir_data
+                                                                       CHANGING  ct_bapiparex        = rt_bapiparex ).
+      CATCH cx_cfd_bapi_mapping INTO DATA(lx_mapping).
+    ENDTRY.
