@@ -1,0 +1,1816 @@
+*&---------------------------------------------------------------------*
+*& Report ZIBD_CREATION_TOP
+*&
+*&---------------------------------------------------------------------*
+REPORT zibd_creation_main.
+
+INCLUDE : zibd_creation_top,          " Include for Global declarations
+          zibd_creation_sel,          " Include for selection screen
+          zibd_creation_frm.          " Include for subroutines
+
+***********************************************************************
+*  AT SELECTION-SCREEN ON VALUE EVENT                                 *
+***********************************************************************
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_lcl_f.
+  DATA : i_file_table TYPE filetable,
+         v_rc TYPE i.
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      default_filename        = '*.xls'
+    CHANGING
+      file_table              = i_file_table
+      rc                      = v_rc
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    IF sy-subrc EQ 0 AND v_rc EQ 1.
+"Populate the path back to Parameter
+      READ TABLE i_file_table INTO p_lcl_f INDEX 1.
+    ENDIF.
+
+
+***********************************************************************
+*  START-OF-SELECTION EVENT                                           *
+***********************************************************************
+START-OF-SELECTION.
+
+  CREATE OBJECT o_utility.
+  CALL METHOD o_utility->refresh_data.
+  CALL METHOD o_utility->upload_data.
+  CALL METHOD o_utility->process_data.
+
+***********************************************************************
+*  END-OF-SELECTION EVENT                                             *
+***********************************************************************
+END-OF-SELECTION.
+
+*  Display data in output
+  CALL METHOD o_utility->display_data.
+
+*&---------------------------------------------------------------------*
+*& Report ZIBD_CREATION_SEL
+*&
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&  Include           ZIBD_CREATION_SEL
+*&---------------------------------------------------------------------*
+
+SELECTION-SCREEN BEGIN OF BLOCK ss01 WITH FRAME TITLE text-001.
+
+PARAMETERS: p_lcl_f      TYPE rlgrap-filename MODIF ID M1.
+
+ SELECTION-SCREEN END OF BLOCK ss01.
+
+*&---------------------------------------------------------------------*
+*& Report ZIBD_CREATION_FRM
+*&
+*&---------------------------------------------------------------------*
+*&  Include           ZIBD_CREATION_FRM
+*&---------------------------------------------------------------------*
+
+CLASS lcl_utility IMPLEMENTATION.
+  METHOD refresh_data.
+    CLEAR: wa_ibd_done,
+           wa_posummary,
+           wa_delvsumm,
+           wa_coildata,
+           wa_file_det,
+           wa_delv_det,
+           wa_grn_det,
+           wa_vbsk,
+           wa_komdlgn,
+           i_po_details,
+           i_ekko,
+           i_ekkn,
+           i_vbak,
+           i_ekpa,
+           i_kna1,
+           i_lfa1,
+           i_lips,
+           i_mseg,
+           i_delv_det,
+           i_grn_det,
+           i_file_det,
+           i_posummary,
+           i_delvsumm,
+           i_coildata,
+           i_komdlgn,
+           i_vbfs,
+           i_vbls,
+           i_lips2.
+  ENDMETHOD.
+
+  METHOD process_poitem_lips.
+
+    DATA: lwa_temp TYPE lfimg ,
+          lwa_cnt  TYPE i.
+
+    IF i_file IS NOT INITIAL.
+      SELECT vgbel
+             vgpos
+             lfimg
+             vbeln
+             posnr
+             meins
+             vrkme
+        INTO TABLE i_lips
+        FROM lips
+         FOR ALL ENTRIES IN i_file
+       WHERE vgbel = i_file-ebeln. "Line item is not given as input as
+      "ebelp and vgpos datatype dont match.
+      IF sy-subrc EQ 0.
+        SORT i_lips
+          BY vgbel
+             vgpos.
+      ENDIF.
+      CLEAR:  wa_delv_det,
+              lwa_temp,
+              lwa_cnt.
+"Below Loop is used Calculate the count of delivery and sum of weight
+      LOOP AT i_lips
+        ASSIGNING <fs_lips>.
+        MOVE <fs_lips>-vgbel TO wa_delv_det-ebeln.
+        MOVE <fs_lips>-vgpos TO wa_delv_det-ebelp.
+        lwa_temp = lwa_temp + <fs_lips>-lfimg.
+        lwa_cnt  = lwa_cnt + 1.
+        AT END OF vgpos.
+          MOVE lwa_temp       TO wa_delv_det-lfimg.
+          MOVE lwa_cnt        TO wa_delv_det-dcnt.
+          APPEND wa_delv_det TO i_delv_det.
+          CLEAR: wa_delv_det,
+                 lwa_temp,
+                 lwa_cnt.
+        ENDAT.
+      ENDLOOP.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD process_poitem_mseg.
+
+    DATA: lwa_temp TYPE lfimg ,
+          lwa_cnt  TYPE i.
+
+    IF i_lips IS NOT INITIAL.
+      SELECT ebeln
+             ebelp
+             mblnr
+             mjahr
+             zeile
+             erfmg
+             bwart
+             shkzg
+        FROM mseg
+        INTO TABLE i_mseg
+         FOR ALL ENTRIES IN i_lips
+       WHERE vbeln_im = i_lips-vbeln
+         AND vbelp_im = i_lips-posnr.
+      IF sy-subrc EQ 0.
+        SORT i_mseg
+          BY ebeln
+             ebelp.
+      ENDIF.
+      CLEAR:  wa_grn_det,
+              lwa_temp,
+              lwa_cnt.
+"Below Loop is used Calculate the count of GRN and sum of weight
+      LOOP AT i_mseg
+        ASSIGNING <fs_mseg>.
+        MOVE <fs_mseg>-ebeln TO wa_grn_det-ebeln.
+        MOVE <fs_mseg>-ebelp TO wa_grn_det-ebelp.
+
+        IF <fs_mseg>-shkzg EQ 'S'.
+          lwa_temp = lwa_temp + <fs_mseg>-erfmg.
+          lwa_cnt  = lwa_cnt + 1.
+        ELSEIF <fs_mseg>-shkzg EQ 'H'.
+          lwa_temp = lwa_temp - <fs_mseg>-erfmg.
+          lwa_cnt  = lwa_cnt - 1.
+        ENDIF.
+
+        AT END OF ebelp.
+          MOVE lwa_temp        TO wa_grn_det-erfmg.
+          MOVE lwa_cnt         TO wa_grn_det-dcnt.
+          APPEND wa_grn_det TO i_grn_det.
+          CLEAR: wa_grn_det,
+                 lwa_temp,
+                 lwa_cnt.
+        ENDAT.
+      ENDLOOP.
+    ENDIF.
+
+  ENDMETHOD.
+  METHOD process_coildata.
+
+    DATA: lwa_temp TYPE lfimg ,
+          lwa_cnt  TYPE i.
+    DATA: lwa_up   TYPE lfimg ,
+          lv_number   TYPE nrlevel,
+          lv_charg(5) TYPE n,
+          lwa_upcnt TYPE i.
+    CLEAR i_up_det.
+"*} End of V01  -
+"*{ Begin of V02
+    DATA: lv_delcnt TYPE i.
+
+    CLEAR lv_delcnt.
+"*} End of V02
+      CLEAR:  wa_delv_det,
+              lwa_temp,
+              lwa_cnt,
+              i_coil_det.
+"Below Loop is used Calculate the count of input Qty and sum of weight
+      LOOP AT i_coildata
+        ASSIGNING <fs_coildata>.
+"*{ Begin of V02
+        CLEAR wa_coildata.
+************************************************************************
+"We shifted the Batch Number Creation logic here
+"as we have to mark all the correct rows with error if any row of the PO
+"is having any error and prevent its IBD creation.
+"For Eg if there are 3 rows with same PO , one of them is having err = 'X'
+"due to over tolerance then mark others with error as well .
+************************************************************************
+        IF <fs_coildata>-errpo NE c_x.
+        CLEAR lv_number.
+        CALL METHOD me->generate_batch_no(
+          EXPORTING im_ctyp = <fs_coildata>-ctype
+          CHANGING  ch_number = lv_number ).
+
+        MOVE lv_number TO lv_charg.
+        CONCATENATE <fs_coildata>-ctype lv_charg
+          INTO <fs_coildata>-charg.
+        ENDIF.
+        MOVE <fs_coildata> TO wa_coildata.
+"*} End of V02
+        MOVE <fs_coildata>-ebeln   TO wa_delv_det-ebeln.
+        MOVE <fs_coildata>-ebelp   TO wa_delv_det-ebelp.
+        MOVE <fs_coildata>-ebeln   TO wa_up_det-ebeln.
+        MOVE <fs_coildata>-ebelp   TO wa_up_det-ebelp.
+        MOVE <fs_coildata>-zzvesel TO wa_up_det-zzvesel.
+*        IF <fs_coildata>-err NE c_x.   "Mark Entire PO as error.
+        IF <fs_coildata>-errpo NE c_x.
+          lwa_temp = lwa_temp + <fs_coildata>-lfimg.
+          lwa_cnt  = lwa_cnt + 1.
+"*{ Begin of V01  -
+          lwa_up     = lwa_up + <fs_coildata>-lfimg.
+          lwa_upcnt  = lwa_upcnt + 1.
+"*} End of V01  -
+        ENDIF.
+"Always keep AT END OF ZZVESEL above EBELP because in ZZVESEL we are incrementing
+"lv_delcnt to be used later in EBELP. If we keep EBELP at top we are first moving it
+"in table and then incrementing it which is incorrect.
+"*{ Begin of V01  -
+        AT END OF zzvesel.
+"*{ Begin of V02
+*          IF wa_coildata-err NE c_x.
+          IF wa_coildata-errpo NE c_x. "Mark Entire PO as error.
+            lv_delcnt = lv_delcnt + 1.
+          ENDIF.
+"*} End of V02
+          MOVE lwa_up           TO wa_up_det-lfimg.
+          MOVE lwa_upcnt        TO wa_up_det-dcnt.
+          APPEND wa_up_det TO i_up_det.
+          CLEAR: wa_up_det,
+                 lwa_up,
+                 lwa_upcnt.
+        ENDAT.
+"*} End of V01  -
+        AT END OF ebelp.
+          MOVE lwa_temp       TO wa_delv_det-lfimg.
+          MOVE lwa_cnt        TO wa_delv_det-dcnt.
+"*{ Begin of V02
+          MOVE lv_delcnt      TO wa_delv_det-delcnt.
+"*} End of V02
+          APPEND wa_delv_det TO i_coil_det.
+          CLEAR: wa_delv_det,
+                 lv_delcnt,
+                 lwa_temp,
+                 lwa_cnt.
+        ENDAT.
+
+      ENDLOOP.
+
+  ENDMETHOD.
+  METHOD upload_data.
+    DATA: i_raw TYPE truxs_t_text_data,
+          li_item_chk TYPE STANDARD TABLE OF zibd_item.
+"*{ Begin of V01  -
+    FIELD-SYMBOLS: <fs_itemchk>  TYPE zibd_item.
+"*} End of V01  -
+    IF p_lcl_f IS NOT INITIAL.
+      CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+        EXPORTING
+          i_line_header        = c_x
+          i_tab_raw_data       = i_raw
+          i_filename           = p_lcl_f
+        TABLES
+          i_tab_converted_data = i_file
+        EXCEPTIONS
+          conversion_failed    = 1
+          OTHERS               = 2.
+
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      ENDIF.
+    ELSE.
+      MESSAGE text-002 TYPE 'E'.
+    ENDIF.
+
+    IF i_file IS NOT INITIAL.
+      SELECT *
+        FROM zibd_item
+        INTO TABLE li_item_chk
+         FOR ALL ENTRIES IN i_file
+        WHERE lichn EQ i_file-lichn.
+      IF sy-subrc EQ 0.
+"*{ Begin of V01  -
+        LOOP AT i_file
+           ASSIGNING <fs_file>.
+          READ TABLE li_item_chk
+            ASSIGNING <fs_itemchk>
+            WITH KEY lichn = <fs_file>-lichn.
+          IF  sy-subrc EQ 0
+          AND <fs_itemchk>-status_flag NE 'D'. "Allow Deleted vendor Batch to be uploaded.
+            MESSAGE e000(zw) WITH text-052 <fs_file>-lichn.
+            EXIT.
+          ENDIF.
+        ENDLOOP.
+*          MESSAGE text-052 TYPE 'E'."*{ Begin of V01  ---
+
+
+
+      ENDIF.
+
+    ENDIF.
+
+    SORT i_file
+      BY ebeln
+         ebelp.
+    CLEAR wa_file_det.
+"Copy the file to desired format
+    LOOP AT i_file
+      ASSIGNING <fs_file>.
+      MOVE-CORRESPONDING <fs_file> TO wa_file_det.
+      APPEND wa_file_det TO i_file_det.
+      CLEAR wa_file_det.
+    ENDLOOP.
+
+    IF i_file IS NOT INITIAL.
+      "Get Data from EKPO Purchasing Document Item
+      SELECT ebeln
+             ebelp
+             txz01
+             werks
+             lgort
+             menge
+             uebto
+             uebtk
+             bwtar
+        FROM ekpo
+        INTO TABLE i_po_details
+        FOR ALL ENTRIES IN i_file
+       WHERE ebeln = i_file-ebeln
+         AND ebelp = i_file-ebelp.
+      IF sy-subrc EQ 0.
+        SORT i_po_details
+          BY ebeln
+             ebelp.
+      ENDIF.
+      "Get Data from EKKN Account Assignment Table
+      SELECT ebeln
+             ebelp
+             vbeln
+        FROM ekkn
+        INTO TABLE i_ekkn
+         FOR ALL ENTRIES IN i_file
+       WHERE ebeln EQ i_file-ebeln
+         AND ebelp EQ i_file-ebelp.
+      IF sy-subrc EQ 0.
+        SORT i_ekkn
+          BY ebeln
+             ebelp.
+        "Get Data from VBAK Sales Document: Header Data
+        SELECT vbeln
+               kunnr
+          FROM vbak
+          INTO TABLE i_vbak
+           FOR ALL ENTRIES IN i_ekkn
+         WHERE vbeln EQ i_ekkn-vbeln.
+        IF sy-subrc EQ 0.
+          SORT i_vbak
+            BY vbeln.
+          "Get Data from KNA1 - Customer Master Data
+          SELECT kunnr
+                 name1
+            FROM kna1
+            INTO TABLE i_kna1
+             FOR ALL ENTRIES IN i_vbak
+           WHERE kunnr EQ i_vbak-kunnr.
+          IF sy-subrc EQ 0.
+            SORT i_kna1
+              BY kunnr.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+      "Get Data from EKKO Purchasing Document Header
+      SELECT ebeln
+             lifnr
+             frgke
+        FROM ekko
+        INTO TABLE i_ekko
+         FOR ALL ENTRIES IN i_file
+       WHERE ebeln = i_file-ebeln.
+      IF sy-subrc EQ 0.
+        SORT i_ekko
+          BY ebeln.
+        "Get Data from EKPA Partner Roles Table
+        SELECT ebeln
+               parvw
+               lifn2
+          FROM ekpa
+          INTO TABLE i_ekpa
+           FOR ALL ENTRIES IN i_ekko
+         WHERE ebeln EQ i_ekko-ebeln
+           AND ( parvw EQ 'MN' OR
+               parvw EQ 'HS') .
+        IF sy-subrc EQ 0.
+          SORT i_ekpa
+            BY ebeln.
+          "Get Data from LFA1 - Vendor Master Table
+          SELECT lifnr
+                 name1
+            FROM lfa1
+            INTO TABLE i_lfa1
+             FOR ALL ENTRIES IN i_ekpa
+           WHERE lifnr EQ i_ekpa-lifn2.
+          IF sy-subrc EQ 0.
+            SORT i_lfa1
+              BY lifnr.
+          ENDIF.
+
+        ENDIF.
+        ""Append Data from LFA1 - Vendor Master Table
+        SELECT lifnr
+               name1
+          FROM lfa1
+          APPENDING TABLE i_lfa1
+           FOR ALL ENTRIES IN i_ekko
+         WHERE lifnr EQ i_ekko-lifnr.
+        IF sy-subrc EQ 0.
+          SORT i_lfa1
+            BY lifnr.
+        ENDIF.
+      ENDIF.
+    ENDIF.  "if file is not initial.
+
+    CALL METHOD me->process_poitem_lips.
+
+    CALL METHOD me->process_poitem_mseg.
+
+  ENDMETHOD.
+
+  METHOD process_data.
+
+    DATA: lv_srno     TYPE i,
+          lv_number   TYPE nrlevel,
+          lv_qty_chk  TYPE lfimg,
+          lv_charg(5) TYPE n.
+    CLEAR: wa_posummary,
+           wa_delvsumm,
+           lv_qty_chk,
+           wa_coildata,
+           lv_srno.
+    UNASSIGN <fs_file>.
+    LOOP AT i_file
+      ASSIGNING <fs_file>.
+"-------------------PO Summary Data-----------------------------------*
+      "PO Vendor Name
+      READ TABLE i_ekko
+        ASSIGNING <fs_ekko>
+        WITH KEY ebeln = <fs_file>-ebeln
+        BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        IF ( <fs_ekko>-frgke NE 'A'
+        AND <fs_ekko>-frgke NE 'R').
+            wa_coildata-err = c_x.
+            wa_coildata-msg = 'PO Not in Released Status'(050).
+        ENDIF.
+        READ TABLE i_lfa1
+          ASSIGNING <fs_lfa1>
+          WITH KEY lifnr = <fs_ekko>-lifnr
+          BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          MOVE <fs_lfa1>-name1 TO wa_posummary-poname1.
+        ENDIF.
+      ELSE.
+"PO Doesnt Exits , Check Next Record.
+        CONTINUE.
+      ENDIF.
+      "PO Number
+      MOVE <fs_file>-ebeln TO wa_posummary-ebeln.
+      "PO Line Item
+      MOVE <fs_file>-ebelp TO wa_posummary-ebelp.
+      "Vessel Number
+      MOVE <fs_file>-zzvesel TO wa_posummary-zzvesel.
+
+      UNASSIGN <fs_po_details>.
+      READ TABLE i_po_details
+        ASSIGNING <fs_po_details>
+        WITH KEY ebeln = <fs_file>-ebeln
+                 ebelp = <fs_file>-ebelp
+      BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        "PO Item Description
+        MOVE <fs_po_details>-txz01 TO wa_posummary-txz01.
+        "Storage Location
+        MOVE <fs_po_details>-lgort TO wa_posummary-lgort.
+        "PO Qty
+        MOVE <fs_po_details>-menge TO wa_posummary-menge.
+        MOVE <fs_po_details>-bwtar TO wa_coildata-bwtar.
+
+        IF  <fs_po_details>-uebtk IS INITIAL
+*        AND <fs_po_details>-uebto NE '0.0'
+        AND <fs_po_details>-tol_det NE c_x.
+"Calculate Tolerance Quantity.
+          <fs_po_details>-tol_qty = <fs_po_details>-menge +
+                                    ( <fs_po_details>-menge *
+                                      <fs_po_details>-uebto / 100 ).
+"Set below indicator. This indicator is set when tolerance limit
+"is determined. This is because we dont want to determine tolerance
+"limit as we will be subtracting delivered quantity from tolerance
+"limit to create new tolerance value. If this indicator is not set
+"we keep resetting tolerance limit.
+          <fs_po_details>-tol_det = c_x.
+        ENDIF.
+
+        READ TABLE i_delv_det
+          ASSIGNING <fs_delv>
+          WITH KEY ebeln = <fs_file>-ebeln
+                   ebelp = <fs_file>-ebelp.
+        IF sy-subrc EQ 0.
+          "Inbound Quantity
+          MOVE <fs_delv>-lfimg TO wa_posummary-lfimg.
+          "Inbound QTY EA
+          MOVE <fs_delv>-dcnt TO wa_posummary-in_qty_ea.
+          IF  <fs_po_details>-uebtk IS INITIAL.
+*          AND <fs_po_details>-uebto NE '0.0'.
+"Formula for checking error.
+"If (Current Qty + Delivered Qty) <= Tolerance Qty
+"if true then tolerance Qty = tolerance Qty - Current Qty
+"Else Error
+            CLEAR lv_qty_chk.
+
+            lv_qty_chk = <fs_file>-lfimg + <fs_delv>-lfimg.
+
+            IF lv_qty_chk LE <fs_po_details>-tol_qty.
+              <fs_po_details>-tol_qty = <fs_po_details>-tol_qty
+                                      - <fs_file>-lfimg.
+"This is because delivery quantity is always subracted
+            ELSE.
+              wa_coildata-err = c_x.
+              wa_coildata-msg = 'Quantity greater than Tolerance limit'(051).
+            ENDIF.
+          ENDIF.
+"*{ Begin of V02
+        ELSE. " READ TABLE i_delv_det
+"Case: When there is a fresh PO (whit no delivery) trying to create a IBD
+"with more than Tolerance Limit.
+          IF  <fs_po_details>-uebtk IS INITIAL.
+"Formula for checking error.
+"If (Current Qty + Delivered Qty) <= Tolerance Qty
+"if true then tolerance Qty = tolerance Qty - Current Qty
+"Else Error
+            CLEAR lv_qty_chk.
+"Here the Delivery Quantity is zero. We check the Upload Quantity only.
+            lv_qty_chk = <fs_file>-lfimg.
+
+            IF lv_qty_chk LE <fs_po_details>-tol_qty.
+              <fs_po_details>-tol_qty = <fs_po_details>-tol_qty
+                                      - <fs_file>-lfimg.
+"This is because delivery quantity is always subracted
+            ELSE.
+              wa_coildata-err = c_x.
+              wa_coildata-msg = 'Quantity greater than Tolerance limit'(051).
+            ENDIF.
+          ENDIF.
+"*} End of V02
+        ENDIF.
+      ENDIF.
+
+      READ TABLE i_grn_det
+        ASSIGNING <fs_grn>
+        WITH KEY ebeln = <fs_file>-ebeln
+                 ebelp = <fs_file>-ebelp.
+      IF sy-subrc EQ 0.
+        "Inbound Quantity
+        MOVE <fs_grn>-erfmg  TO wa_posummary-erfmg.
+        "Inbound QTY EA
+        MOVE <fs_grn>-dcnt TO wa_posummary-grn_ea.
+      ENDIF.
+
+      "Customer Name
+      UNASSIGN <fs_ekkn>.
+      READ TABLE i_ekkn
+        ASSIGNING <fs_ekkn>
+        WITH KEY ebeln = <fs_file>-ebeln
+                 ebelp = <fs_file>-ebelp
+      BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        READ TABLE i_vbak
+          ASSIGNING <fs_vbak>
+          WITH KEY vbeln = <fs_ekkn>-vbeln
+          BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          READ TABLE i_kna1
+            ASSIGNING <fs_kna1>
+            WITH KEY kunnr = <fs_vbak>-kunnr
+            BINARY SEARCH.
+          IF sy-subrc EQ 0.
+            MOVE <fs_kna1>-name1 TO wa_posummary-cust_name.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      "Mfg Vendor Name
+      READ TABLE i_ekpa
+        ASSIGNING <fs_ekpa>
+        WITH KEY ebeln = <fs_file>-ebeln
+      BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        MOVE <fs_ekpa>-lifn2 TO wa_posummary-lifn2.
+        READ TABLE i_lfa1
+          ASSIGNING <fs_lfa1>
+          WITH KEY lifnr = <fs_ekpa>-lifn2
+          BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          MOVE <fs_lfa1>-name1 TO wa_posummary-mfgname1.
+        ENDIF.
+      ENDIF.
+
+      APPEND wa_posummary TO i_posummary.
+   "-------------------End of PO Summary Data--------------------------*
+
+   "-------------------Coil Data---------------------------------------*
+      " Copy Coil Data
+      lv_srno = lv_srno + 1.
+      MOVE lv_srno             TO wa_coildata-del_sr.
+      MOVE <fs_file>-lichn     TO wa_coildata-lichn.
+      MOVE <fs_file>-atwrt     TO wa_coildata-atwrt.
+      MOVE <fs_file>-lfimg     TO wa_coildata-lfimg.
+      MOVE <fs_file>-vrkme     TO wa_coildata-vrkme.
+      MOVE <fs_file>-zzvesel   TO wa_coildata-zzvesel.
+      MOVE <fs_file>-ebeln     TO wa_coildata-ebeln.
+      MOVE <fs_file>-ebelp     TO wa_coildata-ebelp.
+      MOVE wa_posummary-txz01  TO wa_coildata-txz01.
+      MOVE wa_posummary-lgort  TO wa_coildata-lgort.
+      MOVE <fs_file>-lddat     TO wa_coildata-lddat.
+      MOVE <fs_file>-lfdat     TO wa_coildata-lfdat.
+      MOVE <fs_file>-ctype     TO wa_coildata-ctype.
+      MOVE wa_posummary-cust_name  TO wa_coildata-cust_name.
+      MOVE wa_posummary-lifn2      TO wa_coildata-lifn2.
+      MOVE wa_posummary-mfgname1   TO wa_coildata-mfgname1.
+      MOVE wa_posummary-poname1    TO wa_coildata-poname1.
+"*{ Begin of V02
+      MOVE <fs_file>-zzcndoc   TO wa_coildata-zzcndoc.
+"*} End of V02
+"We Calculate the Batch number here to assign it later to delivery and
+"Z table.
+************************************************************************
+"We shifted the Batch Number Creation logic to another loop at i_coildata
+"as we have to mark all the correct rows with error if any row of the PO
+"is having any error and prevent its IBD creation.
+"For Eg if there are 3 rows with same PO , one of them is having err = 'X'
+"due to over tolerance then mark others with error as well .
+************************************************************************
+**      IF wa_coildata-err NE c_x.
+**      CALL METHOD me->generate_batch_no(
+**        EXPORTING im_ctyp = wa_coildata-ctype
+**        CHANGING  ch_number = lv_number ).
+**
+**      MOVE lv_number TO lv_charg.
+**      CONCATENATE wa_coildata-ctype lv_charg
+**        INTO wa_coildata-charg.
+**      ENDIF.
+***********************************************************************
+      APPEND wa_coildata TO i_coildata.
+
+      CLEAR wa_coildata.
+      CLEAR wa_posummary.
+  "-------------------End of Coil Data---------------------------------*
+    ENDLOOP.
+
+    LOOP AT i_coildata
+      ASSIGNING <fs_coildata>.
+***********************************************************************
+      IF <fs_coildata>-err EQ c_x.
+        MOVE c_x to wa_coildata-errpo.
+        MODIFY i_coildata
+          FROM wa_coildata
+          TRANSPORTING errpo
+          WHERE ebeln = <fs_coildata>-ebeln.
+      ENDIF.
+***********************************************************************
+    ENDLOOP.
+"*{ Begin of V01  -
+    SORT i_coildata
+      BY ebeln
+         ebelp
+         zzvesel.
+"*} End of V01  -
+    CLEAR: wa_posummary,
+           wa_delvsumm,
+           wa_coildata,
+           lv_srno.
+
+    SORT i_posummary
+      BY ebeln
+         ebelp
+         zzvesel.    "*{ Begin of V01  -
+    DELETE ADJACENT DUPLICATES FROM i_posummary
+      COMPARING ebeln
+                ebelp
+                zzvesel.  "*{ Begin of V01  -
+    CALL METHOD me->process_coildata.
+    LOOP AT i_posummary
+      ASSIGNING <fs_posummary>.
+      CLEAR: wa_delvsumm,
+             wa_posummary.
+   "-------------------Delivery Summary -------------------------------*
+      " Copy Delivery Summary Data
+      lv_srno = lv_srno + 1.
+      MOVE lv_srno                   TO wa_delvsumm-del_sr.
+"*{ Begin of V01  -
+      READ TABLE i_up_det
+        ASSIGNING <fs_up>
+        WITH KEY ebeln = <fs_posummary>-ebeln
+                 ebelp = <fs_posummary>-ebelp
+                 zzvesel = <fs_posummary>-zzvesel.
+      IF sy-subrc EQ 0.
+        MOVE <fs_up>-lfimg  TO wa_delvsumm-lfimg.
+        MOVE <fs_up>-dcnt   TO wa_delvsumm-no_of_coils.
+      ENDIF.
+"*} End of V01  -
+      READ TABLE i_coil_det
+        ASSIGNING <fs_delv>
+        WITH KEY ebeln = <fs_posummary>-ebeln
+                 ebelp = <fs_posummary>-ebelp.
+      IF sy-subrc EQ 0.
+        MOVE <fs_delv>-lfimg TO <fs_posummary>-up_qty.
+        MOVE <fs_delv>-dcnt  TO <fs_posummary>-up_ea.
+"*{ Begin of V02
+*        MOVE <fs_delv>-dcnt  TO <fs_posummary>-del_no. --
+        MOVE <fs_delv>-delcnt  TO <fs_posummary>-del_no. "++
+
+"*} End of V02
+      ENDIF.
+"*{ Begin of V01  -
+*      MOVE <fs_posummary>-up_qty     TO wa_delvsumm-lfimg.
+*      MOVE <fs_posummary>-up_ea      TO wa_delvsumm-no_of_coils.
+"*} End of V01  -
+      MOVE <fs_posummary>-txz01      TO wa_delvsumm-txz01.
+      MOVE <fs_posummary>-zzvesel    TO wa_delvsumm-zzvesel.
+      MOVE <fs_posummary>-ebeln      TO wa_delvsumm-ebeln.
+      MOVE <fs_posummary>-ebelp      TO wa_delvsumm-ebelp.
+      MOVE <fs_posummary>-txz01      TO wa_delvsumm-txz01.
+      MOVE <fs_posummary>-cust_name  TO wa_delvsumm-cust_name.
+      MOVE <fs_posummary>-mfgname1   TO wa_delvsumm-mfgname1.
+      MOVE <fs_posummary>-poname1    TO wa_delvsumm-poname1.
+      APPEND wa_delvsumm TO i_delvsumm.
+   "-------------------End of Delivery Summary-------------------------*
+      MOVE <fs_posummary> TO wa_posummary.
+
+      AT END OF ebelp.
+
+      ENDAT.
+
+    ENDLOOP.
+
+    CLEAR lv_srno.
+
+    LOOP AT i_coildata
+      ASSIGNING <fs_coildata>.
+
+      READ TABLE i_delvsumm
+        ASSIGNING <fs_delvsumm>
+        WITH KEY ebeln = <fs_coildata>-ebeln
+                 ebelp = <fs_coildata>-ebelp
+                 zzvesel = <fs_coildata>-zzvesel.
+      IF sy-subrc EQ 0.
+        MOVE <fs_delvsumm>-del_sr TO <fs_coildata>-del_sr.
+      ENDIF.
+
+    ENDLOOP.
+"*{ Begin of V01  -
+    SORT i_posummary
+      BY ebeln
+         ebelp.
+    DELETE ADJACENT DUPLICATES FROM i_posummary
+      COMPARING ebeln
+                ebelp.
+    SORT i_delvsumm
+      BY ebeln
+         ebelp
+         zzvesel.
+"*} End of V01  -
+    CLEAR: lv_srno,
+           wa_delvsumm.
+
+  ENDMETHOD.
+
+  METHOD display_data.
+* New ALV instance
+*   We are calling the static Factory method which will give back
+*   the ALV object reference.
+*
+* exception class
+    DATA: lo_msg TYPE REF TO cx_salv_msg.
+
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING
+            r_salv_table = o_alv
+          CHANGING
+            t_table      = i_posummary ).
+      CATCH cx_salv_msg INTO lo_msg.
+    ENDTRY.
+    "Set Top of Page
+    CALL METHOD me->set_top_of_page
+      CHANGING
+        o_alv = o_alv.
+    "Set PF Status
+    CALL METHOD o_alv->set_screen_status(
+      pfstatus = 'ZPF_STATUS1'
+      report   = sy-repid
+      set_functions = o_alv->c_functions_all ).
+
+    o_eventtb    = o_alv->get_event( ).
+
+    "Hide Column
+    TRY.
+        lr_columns = o_alv->get_columns( ).
+        lr_columns->set_optimize( ).
+        lr_column ?= lr_columns->get_column( columnname = 'CHECKBOX' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?= lr_columns->get_column( columnname = 'LIFN2' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?= lr_columns->get_column( columnname = 'ZZVESEL' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+      CATCH cx_salv_not_found .
+    ENDTRY.
+
+
+
+    me->set_header( fp_column = 'EBELN'(003)
+                    fp_text   = 'PO Number'(004)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'EBELP'(005)
+                    fp_text   = 'PO Item'(006)
+                    fp_length = 5 ).
+    me->set_header( fp_column = 'TXZ01'(007)
+                    fp_text   = 'PO Description'(008)
+                    fp_length = 40 ).
+    me->set_header( fp_column = 'MENGE'(009)
+                    fp_text   = 'PO Qty'(010)
+                    fp_length = 18 ).
+    me->set_header( fp_column = 'LFIMG'(011)
+                    fp_text   = 'Inbound Qty'(012)
+                    fp_length = 18 ).
+    me->set_header( fp_column = 'IN_QTY_EA'(013)
+                    fp_text   = 'Inbound Qty EA'(014)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'ERFMG'(015)
+                    fp_text   = 'GRN Qty'(016)
+                    fp_length = 18 ).
+    me->set_header( fp_column = 'GRN_EA'(017)
+                    fp_text   = 'GRN Qty EA'(018)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'UP_QTY'(019)
+                    fp_text   = 'Upload Qty'(020)
+                    fp_length = 18 ).
+    me->set_header( fp_column = 'UP_EA'(021)
+                    fp_text   = 'Upload Qty EA'(022)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'DEL_NO'(023)
+                    fp_text   = 'Delivery No.'(024)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'CUST_NAME'(025)
+                    fp_text   = 'Customer Name'(026)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'MFGNAME1'(027)
+                    fp_text   = 'MFG Vendor Name'(028)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'PONAME1'(029)
+                    fp_text   = 'PO Vendor Name'(030)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'LGORT'(031)
+                    fp_text   = 'Storage Location'(032)
+                    fp_length = 4 ).
+
+****   event handler
+    SET HANDLER me->hndl_double_click FOR o_eventtb.
+    SET HANDLER me->on_user_command FOR o_eventtb.
+* Displaying the ALV
+*   Here we will call the DISPLAY method to get the output on the screen
+    o_alv->display( ).
+
+  ENDMETHOD.
+  METHOD display_delvdata.
+* New ALV instance
+*   We are calling the static Factory method which will give back
+*   the ALV object reference.
+*
+* exception class
+    DATA: lo_msg TYPE REF TO cx_salv_msg.
+
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING
+            r_salv_table = o_delv
+          CHANGING
+            t_table      = i_delvsumm ).
+      CATCH cx_salv_msg INTO lo_msg.
+    ENDTRY.
+    "Set PF Status
+    IF wa_ibd_done NE c_x.
+      CALL METHOD o_delv->set_screen_status(
+        pfstatus = 'ZPF_STATUS2'
+        report   = sy-repid
+        set_functions = o_delv->c_functions_all ).
+    ENDIF.
+    o_eventtb    = o_delv->get_event( ).
+    "Hide Column
+    TRY.
+        lr_columns = o_delv->get_columns( ).
+        lr_columns->set_optimize( ).
+        lr_columns->set_column_position(  columnname = 'DEL_SR'
+                                           position   = 1 ).
+        lr_columns->set_column_position(  columnname = 'NO_OF_COILS'
+                                           position   = 2 ).
+        lr_columns->set_column_position(  columnname = 'LFIMG'
+                                           position   = 3 ).
+        lr_columns->set_column_position(  columnname = 'ZZVESEL'
+                                           position   = 4 ).
+
+      CATCH cx_salv_not_found .
+    ENDTRY.
+    me->set_header( fp_column = 'DEL_SR'(033)
+                    fp_text   = 'Delv Sr. No.'(034)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'NO_OF_COILS'(035)
+                    fp_text   = 'No. of Coils'(036)
+                    fp_length = 4 ).
+    me->set_header( fp_column = 'LFIMG'(011)
+                    fp_text   = 'Delivery Qty'(037)
+                    fp_length =  18 ).
+    me->set_header( fp_column = 'ZZVESEL'(038)
+                    fp_text   = 'Vessel Name'(039)
+                    fp_length = 20 ).
+    me->set_header( fp_column = 'EBELN'(003)
+                    fp_text   = 'PO Number'(004)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'EBELP'(005)
+                    fp_text   = 'PO Item'(006)
+                    fp_length = 5 ).
+    me->set_header( fp_column = 'TXZ01'(007)
+                    fp_text   = 'PO Description'(008)
+                    fp_length = 40 ).
+    me->set_header( fp_column = 'CUST_NAME'(025)
+                    fp_text   = 'Customer Name'(026)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'MFGNAME1'(027)
+                    fp_text   = 'MFG Vendor Name'(028)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'PONAME1'(029)
+                    fp_text   = 'PO Vendor Name'(030)
+                    fp_length = 35 ).
+
+****   event handler
+    SET HANDLER me->on_user_command_delv FOR o_eventtb.
+* Displaying the ALV
+*   Here we will call the DISPLAY method to get the output on the screen
+    o_delv->display( ).
+
+  ENDMETHOD.
+  METHOD display_coildata.
+* New ALV instance
+*   We are calling the static Factory method which will give back
+*   the ALV object reference.
+*
+* exception class
+    DATA: lo_msg TYPE REF TO cx_salv_msg.
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING
+            r_salv_table = o_coil
+          CHANGING
+            t_table      = i_coildata ).
+      CATCH cx_salv_msg INTO lo_msg.
+    ENDTRY.
+    "Set PF Status
+    CALL METHOD o_coil->set_screen_status(
+      pfstatus = 'ZPF_STATUS3'
+      report   = sy-repid
+      set_functions = o_coil->c_functions_all ).
+
+    o_eventtb    = o_coil->get_event( ).
+    "Hide Column
+    TRY.
+        lr_columns = o_coil->get_columns( ).
+        lr_columns->set_optimize( ).
+        lr_columns->set_column_position(  columnname = 'DEL_SR'
+                                           position   = 1 ).
+        lr_columns->set_column_position(  columnname = 'LICHN'
+                                           position   = 2 ).
+        lr_columns->set_column_position(  columnname = 'ATWRT'
+                                           position   = 3 ).
+        lr_columns->set_column_position(  columnname = 'LFIMG'
+                                           position   = 4 ).
+        lr_columns->set_column_position(  columnname = 'VRKME'
+                                           position   = 5 ).
+        lr_columns->set_column_position(  columnname = 'ZZVESEL'
+                                           position   = 6 ).
+        lr_column ?= lr_columns->get_column( columnname = 'CTYPE' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?= lr_columns->get_column( columnname = 'CHARG' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?=
+          lr_columns->get_column( columnname = 'BATCH_CONSUMED' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?= lr_columns->get_column( columnname = 'LIFN2' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+"*{ Begin of V02
+        lr_column ?= lr_columns->get_column( columnname = 'ZZCNDOC' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+        lr_column ?= lr_columns->get_column( columnname = 'ERRPO' ).
+        lr_column->set_visible( value  = if_salv_c_bool_sap=>false ).
+"*} End of V02
+      CATCH cx_salv_not_found .
+    ENDTRY.
+
+    me->set_header( fp_column = 'DEL_SR'(033)
+                    fp_text   = 'Delv Sr. No.'(034)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'LICHN'(040)
+                    fp_text   = 'Vendor Coil No.'(041)
+                    fp_length = 15 ).
+    me->set_header( fp_column = 'ATWRT'(042)
+                    fp_text   = 'Heat Number'(043)
+                    fp_length = 30 ).
+    me->set_header( fp_column = 'LFIMG'(011)
+                    fp_text   = 'Delivery Qty'(037)
+                    fp_length = 18 ).
+    me->set_header( fp_column = 'VRKME'(044)
+                    fp_text   = 'UoM'(045)
+                    fp_length = 5 ).
+    me->set_header( fp_column = 'ZZVESEL'(038)
+                    fp_text   = 'Vessel Name'(039)
+                    fp_length = 20 ).
+    me->set_header( fp_column = 'EBELN'(003)
+                    fp_text   = 'PO Number'(004)
+                    fp_length = 10 ).
+    me->set_header( fp_column = 'EBELP'(005)
+                    fp_text   = 'PO Item'(006)
+                    fp_length = 5 ).
+    me->set_header( fp_column = 'TXZ01'(007)
+                    fp_text   = 'PO Description'(008)
+                    fp_length = 40 ).
+    me->set_header( fp_column = 'CUST_NAME'(025)
+                    fp_text   = 'Customer Name'(026)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'MFGNAME1'(027)
+                    fp_text   = 'MFG Vendor Name'(028)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'PONAME1'(029)
+                    fp_text   = 'PO Vendor Name'(030)
+                    fp_length = 35 ).
+    me->set_header( fp_column = 'ERR'(046)
+                    fp_text   = 'Error Record'(047)
+                    fp_length = 2 ).
+    me->set_header( fp_column = 'MSG'(048)
+                    fp_text   = 'Error Msg'(049)
+                    fp_length = 220 ).
+****   event handler
+    SET HANDLER me->on_user_command_coil FOR o_eventtb.
+* Displaying the ALV
+*   Here we will call the DISPLAY method to get the output on the screen
+    o_coil->display( ).
+
+  ENDMETHOD.
+
+  METHOD set_top_of_page.
+*
+    DATA: lo_header  TYPE REF TO cl_salv_form_layout_grid,
+          lo_h_label TYPE REF TO cl_salv_form_label,
+          lo_h_flow  TYPE REF TO cl_salv_form_layout_flow.
+*
+*   header object
+    CREATE OBJECT lo_header.
+
+    DESCRIBE TABLE i_posummary LINES lv_count.
+*   To create a Lable or Flow we have to specify the target
+*     row and column number where we need to set up the output
+*     text.
+*   information in Bold
+    lo_h_label = lo_header->create_label( row = 1 column = 1 ).
+    lo_h_label->set_text( 'No Of Records'(055) ).  ##NO_TEXT
+*
+    lo_h_flow = lo_header->create_flow( row = 1  column = 2 ).
+    lo_h_flow->create_text( text = lv_count ).
+*   set the top of list using the header for Online.
+    o_alv->set_top_of_list( lo_header ).
+*   set the top of list using the header for Print.
+    o_alv->set_top_of_list_print( lo_header ).
+*
+  ENDMETHOD.                    "set_top_of_page
+
+  METHOD set_header.
+    v_short_txt  = fp_text.
+    v_medium_txt = fp_text.
+    TRY.
+        lr_column ?= lr_columns->get_column( fp_column ).
+        lr_column->set_long_text( fp_text ).
+        lr_column->set_medium_text( v_medium_txt ).
+        lr_column->set_short_text( v_short_txt ).
+        lr_column->set_output_length( fp_length ).
+
+      CATCH cx_salv_not_found.
+* Error message : Exception Raised
+        MESSAGE 'Error during ALV'(053) TYPE 'E'.
+    ENDTRY.
+  ENDMETHOD.                    "SET_HEADER
+  METHOD hndl_double_click.
+
+    READ TABLE i_posummary
+      ASSIGNING <fs_posummary>
+      INDEX row.
+    IF sy-subrc EQ 0.
+       SET PARAMETER ID 'BES' FIELD <fs_posummary>-ebeln.
+       CALL TRANSACTION 'ME23N' AND SKIP FIRST SCREEN.
+    ENDIF.
+
+  ENDMETHOD.
+  METHOD on_user_command.
+
+    CASE e_salv_function.
+      WHEN 'DELIVERY'.
+        CALL METHOD me->display_delvdata.
+      WHEN 'COIL'.
+        CALL METHOD me->display_coildata.
+    ENDCASE.
+  ENDMETHOD. "on_user_command
+  METHOD on_user_command_delv.
+    CASE e_salv_function.
+      WHEN 'COILS'.
+        CALL METHOD me->display_coildata.
+    ENDCASE.
+  ENDMETHOD. "on_user_command
+  METHOD on_user_command_coil.
+    DATA: li_lips TYPE STANDARD TABLE OF lips.
+    CASE e_salv_function.
+      WHEN 'CREATEIBD'.
+        wa_ibd_done = c_x.
+*        CLEAR i_lips_final.
+        CLEAR wa_msg.
+        LOOP AT i_delvsumm
+          ASSIGNING <fs_delvsumm>.
+
+          CLEAR li_lips.
+
+          CALL METHOD me->create_inb_deliveries(
+                          EXPORTING fp_ebeln   = <fs_delvsumm>-ebeln
+                          fp_ebelp   = <fs_delvsumm>-ebelp
+                          fp_zzvesel = <fs_delvsumm>-zzvesel
+                          CHANGING ch_del_sr  = <fs_delvsumm>-del_sr
+                                   ch_lips    = li_lips ).
+
+        ENDLOOP.
+
+        IF wa_msg IS NOT INITIAL .
+          CONCATENATE 'Delivery not Created for ' wa_msg
+            INTO WA_msg SEPARATED BY  space.
+
+          MESSAGE wa_msg TYPE 'I'.
+        ENDIF.
+
+        me->display_delvdata( ).
+    ENDCASE.
+  ENDMETHOD. "on_user_command
+
+  METHOD create_inb_deliveries.
+    DATA : lv_lfdat   TYPE lfdat_v,
+           lv_lddat   TYPE lfdat,
+           lv_zzvesel TYPE zvesel.
+"*{ Begin of V02
+    DATA:  lv_zcndoc   TYPE zcndoc.
+"*} End of V02
+    CLEAR : i_komdlgn,
+            wa_vbsk,
+            i_vbfs,
+            i_vbls,
+            i_lips2,
+            lv_lfdat,
+            lv_lddat,
+"*{ Begin of V02
+            lv_zcndoc,
+"*} End of V02
+            lv_zzvesel.
+    LOOP AT i_coildata
+      ASSIGNING <fs_coildata>
+      WHERE ebeln = fp_ebeln
+        AND ebelp = fp_ebelp
+        AND zzvesel = fp_zzvesel
+        AND err = 'X'.
+      CONCATENATE 'PO' <fs_coildata>-ebeln  'Error : ' <fs_coildata>-msg
+        INTO wa_msg SEPARATED BY space.
+    ENDLOOP.
+
+    CALL FUNCTION 'MESSAGES_INITIALIZE'.
+
+    LOOP AT i_coildata
+      ASSIGNING <fs_coildata>
+      WHERE ebeln = fp_ebeln
+        AND ebelp = fp_ebelp
+        AND zzvesel = fp_zzvesel
+*        AND err = space.
+        AND errpo = space.  "Check if entire PO is in error.
+      MOVE <fs_coildata>-lfdat      TO lv_lfdat.
+      MOVE <fs_coildata>-lddat      TO lv_lddat.
+      MOVE <fs_coildata>-zzvesel    TO lv_zzvesel.
+"*{ Begin of V02
+      MOVE <fs_coildata>-zzcndoc    TO lv_zcndoc.
+"*} End of V02
+      SELECT SINGLE *
+        INTO wa_ekpo
+        FROM ekpo
+       WHERE ebeln EQ <fs_coildata>-ebeln
+         AND ebelp EQ <fs_coildata>-ebelp.
+
+      wa_komdlgn-lfdat = <fs_coildata>-lfdat.
+      wa_komdlgn-matnr = wa_ekpo-matnr.
+      wa_komdlgn-lfimg = <fs_coildata>-lfimg.
+      wa_komdlgn-lichn = <fs_coildata>-lichn.
+      wa_komdlgn-vrkme = <fs_coildata>-vrkme.
+      wa_komdlgn-vgbel = <fs_coildata>-ebeln.
+      wa_komdlgn-vgpos = <fs_coildata>-ebelp.
+      READ TABLE i_delvsumm
+        ASSIGNING <fs_delvsumm>
+        with KEY ebeln = <fs_coildata>-ebeln
+                 ebelp = <fs_coildata>-ebelp
+                zzvesel = <fs_coildata>-zzvesel.
+      IF sy-subrc = 0.
+        wa_komdlgn-anzpk = <fs_delvsumm>-no_of_coils.
+      ENDIF.
+
+* set default parameter
+      wa_komdlgn-vgtyp = 'V'.
+      wa_komdlgn-kzazu = c_x.
+      wa_komdlgn-lfart = 'EL'.
+      APPEND wa_komdlgn TO i_komdlgn.
+    ENDLOOP.
+
+    DATA lt_prop TYPE STANDARD TABLE OF wuebs.
+*  ** Code from IDOC_INPUT_DESADV1
+*  ** Not Available in 3.1
+    CALL FUNCTION 'ME_CONFIRMATION_VIA_EDI'
+         TABLES
+              t_kom  = i_komdlgn
+              errors = lt_prop
+         EXCEPTIONS
+              OTHERS = 1.
+
+    IF sy-subrc NE 0.
+      WRITE / 'Error Coccured in ME_CONFIRMATION_VIA_EDI'(054).
+    ENDIF.
+***** Create
+    DATA: nrnr TYPE nrnr.
+* Sammelgangsnummer vergeben
+    wa_vbsk-mandt = sy-mandt.
+    wa_vbsk-ernam = sy-uname.
+"*{ Begin of V01  -
+*    wa_vbsk-erdat = sy-datum.
+    wa_vbsk-erdat = sy-datlo.
+    wa_vbsk-uzeit = sy-timlo.
+*    wa_vbsk-uzeit = sy-uzeit.
+"*} End of V01  -
+    wa_vbsk-smart = 'L'.
+    DATA: wa_tvsa TYPE tvsa.
+    SELECT SINGLE *
+      FROM tvsa
+      INTO wa_tvsa
+      WHERE smart = wa_vbsk-smart.
+    IF sy-subrc <> 0.
+*** Error Handling To be Done
+*   Meldung ins Protokoll
+    ENDIF.
+
+    nrnr = wa_tvsa-numki.
+    CALL FUNCTION 'NUMBER_GET_NEXT'
+         EXPORTING
+              nr_range_nr = nrnr
+              object      = 'RV_SAMMG'
+         IMPORTING
+              number      = wa_vbsk-sammg
+         EXCEPTIONS
+              OTHERS      = 1.
+    IF sy-subrc <> 0.
+*** Error Hadling TBD
+*   Meldung ins Protokoll
+    ENDIF.
+
+**** Call Core Function GN_DELIVERY_CREATE.
+    CALL FUNCTION 'GN_DELIVERY_CREATE'
+         EXPORTING
+              vbsk_i   = wa_vbsk
+         IMPORTING
+              vbsk_e   = wa_vbsk
+         TABLES
+              xkomdlgn = i_komdlgn
+              xvbfs    = i_vbfs
+              xvbls    = i_vbls
+              xxlips   = i_lips2
+         EXCEPTIONS
+              OTHERS   = 1.
+    IF sy-subrc EQ 0.
+      READ TABLE i_lips2
+        ASSIGNING <fs_lips2>
+        INDEX 1.
+      IF sy-subrc EQ 0
+      AND <fs_lips2>-vbeln IS NOT INITIAL.
+"As soon as delivery is created update Z table.
+        CALL METHOD me->update_tables(
+          EXPORTING im_lips = i_lips2
+                    im_zzvesel = fp_zzvesel ).
+"This is return variable to update delivery number.
+        MOVE <fs_lips2>-vbeln TO ch_del_sr.
+
+        UPDATE likp
+           SET
+"*{ Begin of V02
+               zzcndoc = lv_zcndoc
+"*} End of V02
+               zzeda = lv_lfdat    "Estimated Date of Arrival
+               zzedd = lv_lddat
+               zzvesel = lv_zzvesel
+           WHERE vbeln = <fs_lips2>-vbeln.
+      ENDIF.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD update_tables.
+
+    DATA: li_item     TYPE STANDARD TABLE OF zibd_item,
+          li_zbar     TYPE STANDARD TABLE OF zbarcode,
+          lwa_header  TYPE zibd_header,
+          lwa_item    TYPE zibd_item,
+          lwa_zbar    TYPE zbarcode.
+    FIELD-SYMBOLS <lfs_lips>  TYPE lips.
+
+    CLEAR: lwa_header,
+           lwa_zbar,
+           lwa_item.
+
+    LOOP AT im_lips
+      ASSIGNING <lfs_lips>.
+
+      MOVE <lfs_lips>-vgbel TO lwa_header-ebeln.
+      MOVE <lfs_lips>-vgpos TO lwa_header-ebelp.
+      MOVE <lfs_lips>-vbeln TO lwa_header-vbeln.
+      READ TABLE i_ekko
+        ASSIGNING <fs_ekko>
+        WITH KEY ebeln = lwa_header-ebeln
+      BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        MOVE <fs_ekko>-lifnr TO lwa_header-lifnr.
+        MOVE <fs_ekko>-lifnr TO lwa_item-lifnr.
+      ENDIF.
+      READ TABLE i_po_details
+        ASSIGNING <fs_po_details>
+        WITH KEY ebeln = lwa_header-ebeln
+                 ebelp = lwa_header-ebelp.
+      IF sy-subrc EQ 0.
+        MOVE <fs_po_details>-lgort TO lwa_item-lgort.
+        MOVE <fs_po_details>-werks TO lwa_item-werks.
+      ENDIF.
+
+      MOVE <lfs_lips>-vbeln TO lwa_item-vbeln.
+      MOVE <lfs_lips>-posnr TO lwa_item-posnr.
+      MOVE <lfs_lips>-matnr TO lwa_item-matnr.
+      MOVE <lfs_lips>-lfimg TO lwa_item-lfimg.
+      MOVE <lfs_lips>-meins TO lwa_item-meins.
+"For Batch number we are using LOOP.
+"Ideally this loop should run only once
+"Get details from coil data and new batch number.
+      LOOP AT i_coildata
+        ASSIGNING <fs_coildata>
+        WHERE ebeln = lwa_header-ebeln
+          AND ebelp = lwa_header-ebelp
+          AND zzvesel = im_zzvesel.
+        IF <fs_coildata>-batch_consumed EQ c_x.
+          CONTINUE.
+        ELSE.
+          MOVE <fs_coildata>-atwrt TO lwa_item-atwrt.
+          MOVE <fs_coildata>-ctype TO lwa_item-ctype.
+          MOVE <fs_coildata>-lichn TO lwa_item-lichn.
+          MOVE <fs_coildata>-zzvesel TO lwa_item-zzvesel.
+          MOVE <fs_coildata>-lifn2 TO lwa_item-mfg_lifnr.
+*          MOVE <fs_coildata>-zzvesel TO lwa_zbar-zzvesel.
+          MOVE <fs_coildata>-charg TO lwa_zbar-charg.
+
+          MOVE c_x TO <fs_coildata>-batch_consumed.
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+      APPEND lwa_item TO li_item.
+      APPEND lwa_zbar TO li_zbar.
+    ENDLOOP.
+
+    IF lwa_header IS NOT INITIAL.
+    MODIFY zibd_header
+      FROM @lwa_header.
+    ENDIF.
+    IF li_item IS NOT INITIAL.
+    MODIFY zibd_item
+      FROM TABLE @li_item.
+    ENDIF.
+    IF li_zbar IS NOT INITIAL.
+    MODIFY zbarcode
+      FROM TABLE @li_zbar.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD generate_batch_no.
+    DATA: lv_id       TYPE qslwbez,
+          lwa_tnro    TYPE tnro,
+          lwa_nriv    TYPE nriv,
+          lwa_nrobj   TYPE nrobj.
+    IF im_ctyp EQ 'A'.
+      lwa_nrobj = 'ZSCOIL_LR'.
+      lv_id = 'Z22'.
+    ELSEIF im_ctyp EQ 'Z' .
+      lwa_nrobj = 'ZHCOIL_LR'.
+      lv_id = 'Z23'.
+    ENDIF.
+    SELECT SINGLE *
+      INTO lwa_tnro
+      FROM tnro
+     WHERE object = lwa_nrobj.
+    IF sy-subrc EQ 0.
+
+    ENDIF.
+    lwa_nriv-object    = lwa_nrobj.
+
+    IF lwa_tnro-dtelsobj = 'QSLWBEZ'.
+      lwa_nriv-subobject = lv_id.
+    ENDIF.
+
+    lwa_nriv-nrrangenr = '01'.
+    CLEAR lwa_nriv-nrlevel.
+
+    CALL FUNCTION 'GENERATE_BATCH_NO'
+      CHANGING
+        nriv             = lwa_nriv
+        tnro             = lwa_tnro
+      EXCEPTIONS
+        object_not_found = 1
+        no_new_number    = 2
+        OTHERS           = 3.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE 'E' NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      EXIT.
+    ELSEIF sy-subrc EQ 0.
+      ch_number = lwa_nriv-nrlevel.
+      MODIFY nriv
+        FROM @lwa_nriv.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+             "lcl_delivery_summ
+
+*&---------------------------------------------------------------------*
+*& Report ZIBD_CREATION_TOP
+*&
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&  Include           ZIBD_CREATION_TOP
+*&---------------------------------------------------------------------*
+*TABLES: tvsa.
+TYPES: BEGIN OF ty_file,
+        ebeln       TYPE ebeln,      " 1.Purchasing Document Number
+        ebelp       TYPE ebelp,      " 2.Item Number
+        zzcndoc     TYPE zcndoc,     " 3.ASN No
+        lichn       TYPE lichn,      " 4.Vendor Coil number
+        atwrt       TYPE atwrt,      " 5.Heat number
+        lfimg       TYPE lfimg,      " 6.Delivery Quantity 
+        vrkme       TYPE vrkme,      " 7.Sales Unit
+        zzvesel     TYPE zvesel,     " 8.Name of the vessel
+        lddat       TYPE lddat,      " 9.Departure Date
+        lfdat       TYPE lfdat_v,    " 10.ETA Date
+        ctype       TYPE char1,      " 11.Value A/Z
+        checkbox    TYPE flag,
+      END OF ty_file.
+
+TYPES: BEGIN OF ty_posummary,
+       ebeln       TYPE ebeln,      " Purchasing Document Number
+       ebelp       TYPE ebelp,      " Item Number of Purchasing Document
+       zzvesel     TYPE zvesel,     " Name of the vessel
+       txz01       TYPE txz01,      " PO Item Description
+       menge       TYPE bstmg,      " PO Qty
+       lfimg       TYPE lfimg,      " Inbound Qty
+       in_qty_ea   TYPE char10,     " Inbound Qty EA "No db linkage
+       erfmg       TYPE erfmg,      " GRN Qty
+       grn_ea      TYPE char10,     " GRN Qty EA "No db linkage
+       up_qty      TYPE lfimg,      " Upload Qty "No db linkage
+       up_ea       TYPE char10,     " Upload Qty EA " No db linkage
+       del_no      TYPE char10,     " Delivery Numbers
+       cust_name   TYPE name1_gp,   " Customer Name
+       lifn2       TYPE lifn2,      " MFG Vendor Number
+       mfgname1    TYPE name1_gp,   " Mfg Vendor Name "E
+       poname1     TYPE name1_gp,   " PO vendor name
+       lgort       TYPE lgort_d,    " Storage Location
+       checkbox    TYPE flag,
+       END OF ty_posummary.
+
+TYPES: BEGIN OF ty_delvsummary,
+       ebeln       TYPE ebeln,      " Purchasing Document Number
+       ebelp       TYPE ebelp,      " Item Number of Purchasing Document
+       zzvesel     TYPE zvesel,     " Name of the vessel
+       del_sr      TYPE vbeln_vl,   " Delivery Serial Number
+       no_of_coils TYPE i,          " Number of Coils
+       lfimg       TYPE lfimg,      " Delivery Qty
+       txz01       TYPE txz01,      " PO Item Description
+       cust_name   TYPE name1_gp,   " Customer Name
+       mfgname1    TYPE name1_gp,   " Mfg Vendor Name "E
+       poname1     TYPE name1_gp,   " PO vendor name
+       END OF ty_delvsummary.
+
+TYPES: BEGIN OF ty_coildata,
+         ebeln       TYPE ebeln,      " Purchasing Document Number
+         ebelp       TYPE ebelp,      " Item Number
+         zzvesel     TYPE zvesel,     " Name of the vessel
+         del_sr      TYPE vbeln_vl,   " Delivery Serial Number
+         lichn       TYPE lichn,      " Vendor Coil number
+         atwrt       TYPE atwrt,      " Heat number
+         lfimg       TYPE lfimg,      " Delivery Qty
+         vrkme       TYPE vrkme,      " Sales Unit
+         txz01       TYPE txz01,      " PO Item Description
+         lgort       TYPE lgort_d,    " Storage Location
+         lddat       TYPE lddat,      " Departure Date
+         lfdat       TYPE lfdat_v,    " ETA Date
+         bwtar       TYPE bwtar_d,      " Val Type
+         cust_name   TYPE name1_gp,   " Customer Name
+         lifn2       TYPE lifn2,      " MFG Vendor Number
+         mfgname1    TYPE name1_gp,   " Mfg Vendor Name "E
+         poname1     TYPE name1_gp,   " PO vendor name
+         ctype       TYPE char1,      " A or Z
+         charg       TYPE charg_d,   "Batch Number
+         batch_consumed TYPE char1,      " A or Z
+"*{ Begin of V02  -
+         zzcndoc     TYPE zcndoc,     " 3.ASN No
+"*} End of V02  -
+         err         TYPE char1,      " if record contains error
+         msg         TYPE bapi_msg,   " Error message
+         errpo       TYPE char1, "Flag to prevent IBD creation
+       END OF ty_coildata.
+
+TYPES: BEGIN OF ty_ekko,
+        ebeln       TYPE ebeln,      " Purchasing Document Number
+        lifnr       TYPE elifn,      " Vendor Number
+        frgke       TYPE frgke,      " Release Indicator
+       END OF ty_ekko.
+
+TYPES: BEGIN OF ty_ekkn,
+        ebeln        TYPE ebeln,      " Purchasing Document Number
+        ebelp        TYPE ebelp,      " Item Number
+        vbeln        TYPE vbeln_co,   " Sales Order Number
+       END OF ty_ekkn.
+
+TYPES: BEGIN OF ty_vbak,
+       vbeln        TYPE vbeln_va,   " Sales Order Number
+       kunnr        TYPE kunag,      " Customer Number
+       END OF ty_vbak.
+
+TYPES: BEGIN OF ty_kna1,
+       kunnr        TYPE kunnr,      "Customer Name
+       name1        TYPE name1_gp,    "Name
+       END OF ty_kna1.
+
+TYPES: BEGIN OF ty_ekpa,
+        ebeln        TYPE ebeln,      "Purchasing Document Number
+        parvw        TYPE parvw,      "Partner Function
+        lifn2        TYPE lifn2,      "Reference to vendor
+       END OF ty_ekpa.
+
+TYPES: BEGIN OF ty_lfa1,
+       lifnr        TYPE lifnr,      "Account Number
+       name1        TYPE name1_gp,   "Name
+       END OF ty_lfa1.
+
+TYPES: BEGIN OF ty_po_details,
+        ebeln       TYPE ebeln,      " Purchasing Document Number
+        ebelp       TYPE ebelp,      " Item Number
+        txz01       TYPE txz01,      " PO Item Description
+        werks       TYPE ewerk,       " Plant
+        lgort       TYPE lgort_d,    " Storage Location
+        menge       TYPE bstmg,      " PO Qty
+        uebto       TYPE uebto,      " Overdelivery Tolerance Limit
+        uebtk       TYPE uebtk,      "Unlimited Overdelivery Allowed
+        bwtar       TYPE bwtar_d,    "Valuation type
+        tol_qty     TYPE bstmg,      "Tolerance Quantity
+        tol_det     TYPE char1,      "Tolerance Quantity Determined Flag
+       END OF ty_po_details.
+
+TYPES: BEGIN OF ty_lips,
+        vgbel        TYPE vgbel,       " Purchasing Document Number
+        vgpos        TYPE vgpos,       " Item Number
+        lfimg        TYPE lfimg,       " Actual quantity delivered
+        vbeln        TYPE vbeln_vl,    " Delivery
+        posnr        TYPE posnr_vl,    " Delivery Item
+        meins        TYPE meins,       " Base Unit
+        vrkme        TYPE vrkme,       " Sales Unit
+       END OF ty_lips.
+TYPES: BEGIN OF ty_delv_details,
+        ebeln        TYPE ebeln,       " Purchasing Document Number
+        ebelp        TYPE ebelp,       " Item Number
+        lfimg        TYPE lfimg,       " Actual quantity delivered
+        dcnt        TYPE i,           " Inb Qty EA
+"*{ Begin of V02  -
+        delcnt      TYPE i,           "Additional Count for deliveries
+"*} End of V02  -
+       END OF ty_delv_details.
+"*{ Begin of V01   -
+TYPES: BEGIN OF ty_up_details,
+        ebeln        TYPE ebeln,       " Purchasing Document Number
+        ebelp        TYPE ebelp,       " Item Number
+        zzvesel     TYPE zvesel,     " Name of the vessel
+        lfimg        TYPE lfimg,       " Actual quantity delivered
+        dcnt        TYPE i,           " Inb Qty EA
+       END OF ty_up_details.
+"*} End of V01   -
+TYPES: BEGIN OF ty_mseg,
+       ebeln       TYPE ebeln,      " Purchasing Document Number
+       ebelp       TYPE ebelp,      " Item Number
+       mblnr       TYPE mblnr,      " Number of Material Document
+       mjahr       TYPE mjahr,      " Material Document Year
+       zeile       TYPE mblpo,      " Item in Material Document
+       erfmg       TYPE erfmg,      " Quantity
+       bwart       TYPE bwart,      " Movt Type
+       shkzg       TYPE shkzg,      " Debit/Credit Indicator
+       END OF ty_mseg.
+TYPES: BEGIN OF ty_grn_details,
+       ebeln        TYPE ebeln,       " Purchasing Document Number
+       ebelp        TYPE ebelp,       " Item Number
+       erfmg        TYPE erfmg,       " Actual quantity GRN
+       dcnt        TYPE i,           " GRN Qty EA
+       END OF ty_grn_details.
+
+TYPES: BEGIN OF ty_file_details,
+       ebeln       TYPE ebeln,      " Purchasing Document Number
+       ebelp       TYPE ebelp,      " Item Number of Purchasing Document
+       zzvesel     TYPE zvesel,     " Name of the vessel
+       lfimg       TYPE lfimg,      " Delivery Quantity /Weight
+       END OF ty_file_details.
+
+DATA:
+      i_po_details  TYPE STANDARD TABLE OF ty_po_details,
+      i_ekko        TYPE STANDARD TABLE OF ty_ekko,
+      i_ekkn        TYPE STANDARD TABLE OF ty_ekkn,
+      i_vbak        TYPE STANDARD TABLE OF ty_vbak,
+      i_ekpa        TYPE STANDARD TABLE OF ty_ekpa,
+      i_kna1        TYPE STANDARD TABLE OF ty_kna1,
+      i_lfa1        TYPE STANDARD TABLE OF ty_lfa1,
+      i_lips        TYPE STANDARD TABLE OF ty_lips,
+      i_mseg        TYPE STANDARD TABLE OF ty_mseg,
+      i_delv_det    TYPE STANDARD TABLE OF ty_delv_details,
+      i_up_det      TYPE STANDARD TABLE OF ty_up_details, "*{ Begin of V01   -
+      i_coil_det    TYPE STANDARD TABLE OF ty_delv_details,
+      i_grn_det     TYPE STANDARD TABLE OF ty_grn_details,
+      i_file_det    TYPE STANDARD TABLE OF ty_file_details,
+      i_posummary   TYPE STANDARD TABLE OF ty_posummary,
+      i_delvsumm    TYPE STANDARD TABLE OF ty_delvsummary,
+      i_coildata    TYPE STANDARD TABLE OF ty_coildata,
+      i_komdlgn     TYPE STANDARD TABLE OF komdlgn,
+      i_vbfs        TYPE STANDARD TABLE OF vbfs,
+      i_vbls        TYPE STANDARD TABLE OF vbls,
+      i_lips2       TYPE STANDARD TABLE OF lips.
+
+FIELD-SYMBOLS:
+      <fs_file>       TYPE ty_file,
+      <fs_po_details> TYPE ty_po_details,
+      <fs_delvsumm>   TYPE ty_delvsummary,
+      <fs_coildata>   TYPE ty_coildata,
+      <fs_posummary>  TYPE ty_posummary,
+      <fs_ekkn>       TYPE ty_ekkn,
+      <fs_ekko>       TYPE ty_ekko,
+      <fs_kna1>       TYPE ty_kna1,
+      <fs_vbak>       TYPE ty_vbak,
+      <fs_ekpa>       TYPE ty_ekpa,
+      <fs_lips>       TYPE ty_lips,
+      <fs_mseg>       TYPE ty_mseg,
+      <fs_delv>       TYPE ty_delv_details,
+      <fs_up>         TYPE ty_up_details,  "*{ Begin of V01   -
+      <fs_grn>        TYPE ty_grn_details,
+      <fs_lfa1>       TYPE ty_lfa1,
+      <fs_lips2>      TYPE lips.
+
+DATA: wa_ibd_done    TYPE char1,
+      wa_posummary   TYPE ty_posummary,
+      wa_delvsumm    TYPE ty_delvsummary,
+      wa_coildata    TYPE ty_coildata,
+      wa_file_det    TYPE ty_file_details,
+      wa_delv_det    TYPE ty_delv_details,
+      wa_up_det      TYPE ty_up_details,  "*{ Begin of V01   -
+      wa_grn_det     TYPE ty_grn_details,
+      wa_vbsk        TYPE vbsk,
+      wa_msg         TYPE string,
+      wa_komdlgn     TYPE komdlgn.
+
+CONSTANTS:
+      c_x            TYPE char1    VALUE 'X'.
+
+CLASS lcl_utility DEFINITION FINAL.
+
+  PUBLIC SECTION.
+    METHODS:
+             refresh_data,
+             process_poitem_lips,
+             process_poitem_mseg,
+             process_coildata,
+             upload_data,
+             process_data,
+             display_data,
+             display_delvdata,
+             display_coildata.
+    METHODS update_tables
+            IMPORTING im_lips    TYPE tab_lips
+                      im_zzvesel TYPE zvesel.
+    METHODS generate_batch_no
+            IMPORTING im_ctyp       TYPE char1
+            CHANGING  ch_number     TYPE nrlevel.
+    METHODS create_inb_deliveries
+            IMPORTING fp_ebeln   TYPE ebeln
+                      fp_ebelp   TYPE ebelp
+                      fp_zzvesel TYPE zvesel
+            CHANGING  ch_del_sr  TYPE vbeln_vl
+                      ch_lips    TYPE tab_lips.
+    METHODS hndl_double_click
+      FOR EVENT double_click
+      OF cl_salv_events_table
+      IMPORTING  row
+                 column.
+    METHODS on_user_command
+        FOR EVENT added_function OF cl_salv_events
+        IMPORTING e_salv_function.
+    METHODS on_user_command_delv
+        FOR EVENT added_function OF cl_salv_events
+        IMPORTING e_salv_function.
+    METHODS on_user_command_coil
+        FOR EVENT added_function OF cl_salv_events
+        IMPORTING e_salv_function.
+*   ALV reference
+    DATA: o_alv  TYPE REF TO cl_salv_table,
+          o_delv TYPE REF TO cl_salv_table,
+          o_coil TYPE REF TO cl_salv_table,
+          wa_ekpo TYPE  ekpo,
+          v_short_txt     TYPE  scrtext_s,
+          v_medium_txt    TYPE  scrtext_m,
+          lr_columns TYPE REF TO cl_salv_columns_table,
+          lr_column  TYPE REF TO cl_salv_column_table.
+
+  PRIVATE SECTION.
+    DATA: i_file   TYPE STANDARD TABLE OF ty_file,
+          lv_count TYPE i.
+*   Set Top of page
+    METHODS:
+      set_top_of_page
+        CHANGING
+          o_alv TYPE REF TO cl_salv_table,
+      set_header
+        IMPORTING fp_column   TYPE  lvc_fname
+" ALV control: Field name of internal table field
+                  fp_text     TYPE  scrtext_l     " Long Field Label
+                  fp_length   TYPE  lvc_outlen.
+" ALV control: Column width in characters
+ENDCLASS.
+
+DATA: o_utility    TYPE REF TO lcl_utility,
+      o_eventtb    TYPE REF TO cl_salv_events_table.
+
+
+ 
+
+ 
+
+ 
+
+
